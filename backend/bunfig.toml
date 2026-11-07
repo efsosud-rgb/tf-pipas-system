@@ -1,0 +1,3 @@
+[test]
+# Fixa o fuso do Rio de Janeiro nos testes, para "hoje" e "este mês" darem sempre o mesmo resultado.
+preload = ["./testes/preparar.ts"]
