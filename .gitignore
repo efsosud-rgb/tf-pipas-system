@@ -1,22 +1,19 @@
-/**/node_modules/
-/**/dist/
-/**/dist-ssr/
-/**/vendor/
-backend/.env
-backend/.env.*
-!backend/.env.example
-backend/database/*.sqlite
-backend/database/*.sqlite-journal
-backend/storage/framework/cache/**
-backend/storage/framework/sessions/**
-backend/storage/framework/views/**
-backend/storage/logs/**
-**/__pycache__/
-**/*.py[cod]
-**/*$py.class
-**/.pytest_cache/
+# Dependências e builds
+node_modules/
+frontend/dist/
+backend/dist/
+
+# Dados locais (o banco da loja nunca vai para o GitHub)
+backend/dados-dev/
+dados/
+*.db
+*.db-wal
+*.db-shm
+
+# Sistema e editores
 .DS_Store
 Thumbs.db
-ai-service/.pytest_cache
-ai-service/__pycache__
-ai-service/*/__pycache__
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.log

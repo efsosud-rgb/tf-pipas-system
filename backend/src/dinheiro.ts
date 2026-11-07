@@ -58,6 +58,13 @@ export function ratear(total: number, pesos: number[]): number[] {
   return partes.map(Number);
 }
 
+const formatoReais = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+/** R$ 1.234,56 — só para mensagens; a tela formata os próprios valores. */
+export function reais(centavos: number): string {
+  return formatoReais.format(centavos / 100).replace(/ /g, " ");
+}
+
 /** Taxa da maquininha. A taxa é guardada em pontos-base: 1,99% = 199. */
 export function calcularTaxa(valorCentavos: number, taxaBp: number): number {
   return multiplicarDividir(valorCentavos, taxaBp, 10_000);
