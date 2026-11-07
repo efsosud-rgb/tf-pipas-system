@@ -2,6 +2,7 @@ FROM php:8.3-cli-alpine
 
 # Install system dependencies & PostgreSQL dev libraries
 RUN apk add --no-cache \
+    postgresql-client \
     postgresql-dev \
     libzip-dev \
     zip \
@@ -26,4 +27,4 @@ RUN composer dump-autoload --optimize || true
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "php artisan migrate --force && php artisan db:seed --force || true && php artisan serve --host=0.0.0.0 --port=8000"]
+CMD ["sh", "-c", "php artisan migrate --force --seed || true && php artisan serve --host=0.0.0.0 --port=8000"]
