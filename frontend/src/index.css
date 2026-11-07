@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+:root {
+  --tf-carmim: #E63946;
+  --tf-orange: #F4A261;
+  --tf-yellow: #E9C46A;
+  --tf-dark: #0F172A;
+  --tf-glass-bg: rgba(15, 23, 42, 0.75);
+  --tf-glass-border: rgba(244, 162, 97, 0.2);
+}
+
+body {
+  margin: 0;
+  background-color: #0B1120;
+  color: #F8FAFC;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  overflow-x: hidden;
+}
+
+.glass-panel {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.glass-panel-glow {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(244, 162, 97, 0.25);
+  box-shadow: 0 0 25px -5px rgba(230, 57, 70, 0.25);
+}
+
+.gradient-tf {
+  background: linear-gradient(135deg, #E63946 0%, #F4A261 50%, #E9C46A 100%);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #E63946 0%, #F4A261 50%, #E9C46A 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
