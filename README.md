@@ -24,11 +24,14 @@ Sistema ERP completo e inteligente desenvolvido sob medida para a **TF Pipas**, 
 
 ```
 .
-├── backend/            # API RESTful Laravel (PHP 8.3 / SQLite / MySQL)
+├── docker-compose.yml  # Orquestração unificada de todos os 4 serviços
+├── setup.sh            # Script de inicialização automatizada de 1 comando
+├── backend/            # API RESTful Laravel 13 (PHP 8.3 / PostgreSQL pgvector / SQLite)
 │   ├── app/
 │   │   ├── Http/Controllers/Api/  # PosController, ProductionOrderController, FinancialController
 │   │   └── Models/                # Material, Product, BomItem, ProductionOrder, Sale, FinancialTransaction
 │   ├── database/migrations/       # Esquema relacional com integridade referencial
+│   ├── Dockerfile                 # Contêiner PHP 8.3 Alpine com pdo_pgsql
 │   └── routes/api.php             # Endpoints RESTful completos
 ├── frontend/           # Interface PWA React 19 + TypeScript + Vite + Tailwind CSS + Three.js
 │   ├── src/
@@ -40,12 +43,14 @@ Sistema ERP completo e inteligente desenvolvido sob medida para a **TF Pipas**, 
 │   │   │   ├── FinancialView.tsx      # DRE gerencial, Fluxo de Caixa e ML de vendas
 │   │   │   └── AiAgentsView.tsx       # Central Hermes Agent com MCPs e RAG
 │   │   └── App.tsx                    # Shell com navegação e status SEFAZ/Qwen
+│   └── Dockerfile                     # Multi-stage build (Node 20 + Nginx proxy reverso)
 └── ai-service/         # Microsserviço Python FastAPI (Ollama Qwen 3.5, pgvector RAG & MCPs)
     ├── app/
     │   ├── main.py            # Endpoints RAG, MCP Registry e Projeção de Demanda
     │   ├── ml_forecasting.py  # Modelo Machine Learning (Ridge) com vento RJ e férias escolares
     │   ├── mcp_tools.py       # Definição e execução de MCPs (Model Context Protocol)
     │   └── vector_store.py    # Memória vetorial com embeddings semânticos pgvector
+    ├── Dockerfile             # Contêiner Python 3.12 Slim
     └── requirements.txt
 ```
 
@@ -98,7 +103,7 @@ Sistema ERP completo e inteligente desenvolvido sob medida para a **TF Pipas**, 
 ## 4. Camada de Inteligência Artificial (Open Source)
 
 - **Ollama com Qwen 3.5**: Raciocínio local open-source para atendimento comercial, auditoria de estoque e conferência contábil.
-- **pgvector para RAG (Retrieval-Augmented Generation)**: Indexação semântica de catálogos técnicos, regras de tributação SEFAZ-RJ e manuais de fabricação com similaridade de cosseno.
+- **pgvector para RAG (Retrieval-Augmented Generation)**: Indexação semântica de catálogos técnicos, regras de tributação SEFAZ-RJ e manuais de fabricação com similaridade de cosseno no PostgreSQL.
 - **Hermes Agent & MCPs (Model Context Protocol v1.0)**:
   - `check_raw_material_stock`: Inspeção de estoque de insumos críticos e alerta de reposição.
   - `simulate_production_capacity`: Simulação de capacidade de montagem baseada nos insumos disponíveis.
@@ -107,14 +112,36 @@ Sistema ERP completo e inteligente desenvolvido sob medida para a **TF Pipas**, 
 
 ---
 
-## 5. Como Executar a Aplicação Localmente
+## 5. Implantação e Execução no Servidor da Loja
 
-### Pré-requisitos
-- PHP 8.2+ e Composer
-- Node.js 18+ e npm
-- Python 3.10+ e pip
+### 5.1 Método Recomendado: Inicialização em 1 Comando (Docker Compose)
 
-### Inicialização Rápida
+Certifique-se de que o Docker e Docker Compose estão instalados no servidor da loja. Em seguida, execute:
+
+```bash
+# Permissão de execução (caso necessário)
+chmod +x setup.sh
+
+# Inicialização automática de todo o ecossistema (PostgreSQL pgvector, Laravel, FastAPI, React)
+./setup.sh
+```
+
+Ou diretamente pelo Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+### 5.2 Serviços e Portas Expostas
+
+| Serviço | Contêiner | Porta Externa | Descrição |
+|---|---|---|---|
+| **Frontend PWA** | `tfpipas-frontend` | `http://localhost:3000` ou `:80` | Interface React 19 + PWA + Three.js |
+| **Backend API** | `tfpipas-backend` | `http://localhost:8000/api` | API Laravel 13 (REST, NFC-e, BOM) |
+| **Microsserviço IA** | `tfpipas-ai` | `http://localhost:8001/docs` | FastAPI + Ollama Qwen 3.5 + MCP + ML |
+| **Banco de Dados** | `tfpipas-database` | `localhost:5432` | PostgreSQL 16 com extensão `pgvector` |
+
+### 5.3 Execução Manual / Desenvolvimento Local sem Docker
 
 1. **Backend (Laravel)**:
    ```bash
@@ -137,5 +164,3 @@ Sistema ERP completo e inteligente desenvolvido sob medida para a **TF Pipas**, 
    npm install
    npm run dev -- --host 0.0.0.0 --port 3000
    ```
-
-Acesse a interface através do navegador em `http://localhost:3000`.

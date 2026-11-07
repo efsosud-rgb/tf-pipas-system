@@ -1,0 +1,91 @@
+services:
+  # 1. Banco de Dados PostgreSQL com extensão pgvector ativada
+  database:
+    image: pgvector/pgvector:pg16
+    container_name: tfpipas-database
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tfpipas_db
+      POSTGRES_USER: tfpipas_user
+      POSTGRES_PASSWORD: tfpipas_secure_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tfpipas_user -d tfpipas_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tfpipas-network
+
+  # 2. Backend Laravel 13 (PHP 8.3)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tfpipas-backend
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      APP_NAME: "TF Pipas ERP"
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: http://localhost:8000
+      DB_CONNECTION: pgsql
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_DATABASE: tfpipas_db
+      DB_USERNAME: tfpipas_user
+      DB_PASSWORD: tfpipas_secure_pass
+    ports:
+      - "8000:8000"
+    networks:
+      - tfpipas-network
+
+  # 3. Microsserviço de IA (Python FastAPI + MCP + pgvector + Ollama)
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: tfpipas-ai
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://tfpipas_user:tfpipas_secure_pass@database:5432/tfpipas_db"
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      BACKEND_API_URL: "http://backend:8000/api"
+      PORT: 8001
+    ports:
+      - "8001:8001"
+    networks:
+      - tfpipas-network
+
+  # 4. Frontend React 19 PWA (Vite + TypeScript + Three.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tfpipas-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - ai-service
+    ports:
+      - "80:80"
+      - "3000:80"
+    networks:
+      - tfpipas-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  tfpipas-network:
+    driver: bridge
