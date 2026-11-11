@@ -1,7 +1,7 @@
 import type { Banco } from "../banco";
 import { transacao } from "../banco";
 import { ErroNegocio, naoEncontrado } from "../erros";
-import { agoraIso, dataLocal, ehDataValida, somarMeses } from "../relogio";
+import { agoraIso, dataLocal, diferencaEmDias, ehDataValida, somarDias, somarMeses } from "../relogio";
 import { exigirCaixaAberto, lancarNaGaveta, sessaoAberta } from "./caixa";
 
 /**
@@ -541,5 +541,122 @@ export function resumoFinanceiro(db: Banco, de: string, ate: string): ResumoFina
     },
     saldo_centavos: entradas - saidas,
     pendentes_no_periodo: { a_pagar_centavos: pendente("despesa"), a_receber_centavos: pendente("receita") },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Fluxo de caixa dia a dia                                             */
+/* ------------------------------------------------------------------ */
+
+export interface DiaDoFluxo {
+  data: string;
+  /** Dia que já passou (ou hoje): valores realizados. Dia futuro: só o previsto. */
+  futuro: boolean;
+  entradas: { vendas_centavos: number; receitas_centavos: number; total_centavos: number };
+  saidas: { taxas_centavos: number; despesas_centavos: number; total_centavos: number };
+  saldo_dia_centavos: number;
+  /** Variação acumulada desde o primeiro dia do período (não é o saldo do banco). */
+  acumulado_centavos: number;
+  /** Contas pendentes com vencimento neste dia (só de hoje em diante). */
+  previsto: { a_receber_centavos: number; a_pagar_centavos: number };
+  /** Acumulado contando também o previsto até este dia. */
+  acumulado_previsto_centavos: number;
+}
+
+export interface FluxoDiario {
+  de: string;
+  ate: string;
+  hoje: string;
+  dias: DiaDoFluxo[];
+  totais: {
+    entradas_centavos: number;
+    saidas_centavos: number;
+    saldo_centavos: number;
+    a_receber_centavos: number;
+    a_pagar_centavos: number;
+  };
+  /** Contas pendentes que já venceram (antes de hoje): não entram no previsto dos dias, aparecem à parte. */
+  atrasadas: { a_receber_centavos: number; a_pagar_centavos: number; quantidade: number };
+}
+
+/**
+ * Dinheiro que entrou e saiu em cada dia (regime de caixa), mais as contas a
+ * pagar e a receber previstas para os dias seguintes. As taxas de cartão e PIX
+ * entram no dia da venda.
+ */
+export function fluxoDiario(db: Banco, de: string, ate: string): FluxoDiario {
+  if (diferencaEmDias(de, ate) > 400) throw new ErroNegocio("Para ver dia a dia, escolha um período de até 1 ano.", 400);
+  const hoje = dataLocal();
+  const porDia = <T extends Record<string, number>>(sql: string, params: Record<string, string>) =>
+    new Map((db.query(sql).all(params) as Array<{ d: string } & T>).map((l) => [l.d, l]));
+
+  const vendas = porDia<{ total: number; taxas: number }>(
+    `SELECT data AS d, SUM(total_centavos) AS total, SUM(taxas_centavos) AS taxas
+     FROM vendas WHERE status = 'concluida' AND data BETWEEN $de AND $ate GROUP BY data`,
+    { de, ate },
+  );
+  const pagos = porDia<{ receitas: number; despesas: number }>(
+    `SELECT data_pagamento AS d,
+            SUM(CASE WHEN tipo = 'receita' THEN valor_centavos ELSE 0 END) AS receitas,
+            SUM(CASE WHEN tipo = 'despesa' THEN valor_centavos ELSE 0 END) AS despesas
+     FROM lancamentos WHERE pago = 1 AND data_pagamento BETWEEN $de AND $ate GROUP BY data_pagamento`,
+    { de, ate },
+  );
+  const inicioPrevisto = de > hoje ? de : hoje;
+  const previstos = porDia<{ receber: number; pagar: number }>(
+    `SELECT vencimento AS d,
+            SUM(CASE WHEN tipo = 'receita' THEN valor_centavos ELSE 0 END) AS receber,
+            SUM(CASE WHEN tipo = 'despesa' THEN valor_centavos ELSE 0 END) AS pagar
+     FROM lancamentos WHERE pago = 0 AND vencimento BETWEEN $inicio AND $ate GROUP BY vencimento`,
+    { inicio: inicioPrevisto, ate },
+  );
+  const atrasadas = db
+    .query(
+      `SELECT COUNT(*) AS quantidade,
+              COALESCE(SUM(CASE WHEN tipo = 'receita' THEN valor_centavos ELSE 0 END), 0) AS receber,
+              COALESCE(SUM(CASE WHEN tipo = 'despesa' THEN valor_centavos ELSE 0 END), 0) AS pagar
+       FROM lancamentos WHERE pago = 0 AND vencimento < $hoje`,
+    )
+    .get({ hoje }) as { quantidade: number; receber: number; pagar: number };
+
+  const dias: DiaDoFluxo[] = [];
+  let acumulado = 0;
+  let acumuladoPrevisto = 0;
+  const totais = { entradas_centavos: 0, saidas_centavos: 0, saldo_centavos: 0, a_receber_centavos: 0, a_pagar_centavos: 0 };
+  for (let d = de; d <= ate; d = somarDias(d, 1)) {
+    const v = vendas.get(d);
+    const p = pagos.get(d);
+    const prev = previstos.get(d);
+    const entradas = { vendas_centavos: v?.total ?? 0, receitas_centavos: p?.receitas ?? 0, total_centavos: 0 };
+    entradas.total_centavos = entradas.vendas_centavos + entradas.receitas_centavos;
+    const saidas = { taxas_centavos: v?.taxas ?? 0, despesas_centavos: p?.despesas ?? 0, total_centavos: 0 };
+    saidas.total_centavos = saidas.taxas_centavos + saidas.despesas_centavos;
+    const saldo = entradas.total_centavos - saidas.total_centavos;
+    const previsto = { a_receber_centavos: prev?.receber ?? 0, a_pagar_centavos: prev?.pagar ?? 0 };
+    acumulado += saldo;
+    acumuladoPrevisto += saldo + previsto.a_receber_centavos - previsto.a_pagar_centavos;
+    totais.entradas_centavos += entradas.total_centavos;
+    totais.saidas_centavos += saidas.total_centavos;
+    totais.a_receber_centavos += previsto.a_receber_centavos;
+    totais.a_pagar_centavos += previsto.a_pagar_centavos;
+    dias.push({
+      data: d,
+      futuro: d > hoje,
+      entradas,
+      saidas,
+      saldo_dia_centavos: saldo,
+      acumulado_centavos: acumulado,
+      previsto,
+      acumulado_previsto_centavos: acumuladoPrevisto,
+    });
+  }
+  totais.saldo_centavos = totais.entradas_centavos - totais.saidas_centavos;
+  return {
+    de,
+    ate,
+    hoje,
+    dias,
+    totais,
+    atrasadas: { a_receber_centavos: atrasadas.receber, a_pagar_centavos: atrasadas.pagar, quantidade: atrasadas.quantidade },
   };
 }

@@ -1,6 +1,7 @@
 import { ArrowDownCircle, ArrowUpCircle, Lock, LockOpen, Printer } from "lucide-react";
 import { useState } from "react";
 import { api, mensagemDeErro } from "../api";
+import { useUsuario } from "../auth";
 import { avisar } from "../componentes/avisos";
 import { ComprovanteFechamento, imprimirNoPapel } from "../componentes/comprovante";
 import {
@@ -20,7 +21,7 @@ import {
   Vazio,
 } from "../componentes/ui";
 import { dataHora, hora, plural, reais } from "../formato";
-import { avisarMudanca, gravarLocal, lerLocal, useApi } from "../hooks";
+import { avisarMudanca, useApi } from "../hooks";
 import type { Config, ResumoCaixa, SessaoNaLista } from "../tipos";
 
 const NOMES: Record<string, string> = {
@@ -186,7 +187,7 @@ function ResumoAberto({ resumo }: { resumo: ResumoCaixa }) {
               <div className="min-w-0">
                 <p className="text-[13.5px] font-semibold">{NOMES[m.tipo] ?? m.tipo}</p>
                 <p className="truncate text-[12px] text-suave">
-                  {hora(m.criado_em)} · {m.descricao}
+                  {[hora(m.criado_em), m.descricao, m.usuario_nome].filter(Boolean).join(" · ")}
                 </p>
               </div>
               <span className={cx("text-[14px] font-bold tabular-nums", m.valor_centavos < 0 ? "text-perigo" : "text-sucesso")}>
@@ -203,7 +204,7 @@ function ResumoAberto({ resumo }: { resumo: ResumoCaixa }) {
 
 function AbrirCaixa() {
   const [fundo, setFundo] = useState<number | null>(null);
-  const [operador, setOperador] = useState(() => lerLocal("tfpipas.operador", ""));
+  const usuario = useUsuario();
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   async function abrir(e: React.FormEvent) {
@@ -211,8 +212,7 @@ function AbrirCaixa() {
     setEnviando(true);
     setErro(null);
     try {
-      await api.post("/api/caixa/abrir", { fundo_troco_centavos: fundo ?? 0, operador });
-      gravarLocal("tfpipas.operador", operador);
+      await api.post("/api/caixa/abrir", { fundo_troco_centavos: fundo ?? 0 });
       avisar("Caixa aberto.");
       avisarMudanca();
     } catch (er) {
@@ -223,21 +223,18 @@ function AbrirCaixa() {
   }
   return (
     <Cartao>
-      <form onSubmit={abrir} className="grid items-end gap-4 md:grid-cols-[auto_1fr_1fr_auto]">
+      <form onSubmit={abrir} className="grid items-end gap-4 md:grid-cols-[auto_1fr_auto]">
         <div className="grid size-14 place-items-center rounded-2xl bg-[#f1f1ee]">
           <LockOpen className="size-6" />
         </div>
-        <Campo rotulo="Fundo de troco" dica="Dinheiro que já está na gaveta agora (pode ser zero).">
+        <Campo rotulo="Fundo de troco" dica={`Dinheiro que já está na gaveta agora (pode ser zero). O caixa fica no nome de ${usuario?.nome ?? "quem está logado"}.`}>
           <CampoDinheiro valor={fundo} aoMudar={setFundo} placeholder="0,00" autoFocus />
-        </Campo>
-        <Campo rotulo="Operador" dica="Quem está no caixa (opcional).">
-          <Entrada value={operador} maxLength={60} onChange={(e) => setOperador(e.target.value)} />
         </Campo>
         <Botao type="submit" tamanho="lg" carregando={enviando}>
           Abrir caixa
         </Botao>
         {erro && (
-          <div className="md:col-span-4">
+          <div className="md:col-span-3">
             <AvisoErro mensagem={erro} />
           </div>
         )}
@@ -301,7 +298,7 @@ function MovimentoGaveta({ tipo, gaveta, aoFechar }: { tipo: "sangria" | "suprim
 function FecharCaixa({ resumo, aoFechar }: { resumo: ResumoCaixa; aoFechar: () => void }) {
   const [contado, setContado] = useState<number | null>(null);
   const [obs, setObs] = useState("");
-  const [operador, setOperador] = useState(() => lerLocal("tfpipas.operador", ""));
+  const usuario = useUsuario();
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [fechado, setFechado] = useState<ResumoCaixa | null>(null);
@@ -314,7 +311,7 @@ function FecharCaixa({ resumo, aoFechar }: { resumo: ResumoCaixa; aoFechar: () =
     setEnviando(true);
     setErro(null);
     try {
-      const r = await api.post<ResumoCaixa>("/api/caixa/fechar", { contado_centavos: contado, operador, observacao: obs });
+      const r = await api.post<ResumoCaixa>("/api/caixa/fechar", { contado_centavos: contado, observacao: obs });
       setFechado(r);
       avisarMudanca();
     } catch (er) {
@@ -381,14 +378,9 @@ function FecharCaixa({ resumo, aoFechar }: { resumo: ResumoCaixa; aoFechar: () =
             <Linha rotulo="Diferença" valor={<Diferenca valor={diferenca} />} forte />
           </div>
         )}
-        <div className="grid gap-4 md:grid-cols-2">
-          <Campo rotulo="Quem está fechando">
-            <Entrada value={operador} maxLength={60} onChange={(e) => setOperador(e.target.value)} />
-          </Campo>
-          <Campo rotulo="Observação">
-            <Entrada value={obs} maxLength={300} onChange={(e) => setObs(e.target.value)} placeholder={diferenca ? "Explique a diferença, se souber" : "Opcional"} />
-          </Campo>
-        </div>
+        <Campo rotulo="Observação" dica={`Fechamento no nome de ${usuario?.nome ?? "quem está logado"}.`}>
+          <Entrada value={obs} maxLength={300} onChange={(e) => setObs(e.target.value)} placeholder={diferenca ? "Explique a diferença, se souber" : "Opcional"} />
+        </Campo>
         <p className="text-[12.5px] text-suave">
           PIX e cartões deste caixa: {resumo.vendas.por_forma.filter((f) => f.tipo !== "dinheiro").map((f) => `${f.nome} ${reais(f.valor_centavos)}`).join(" · ") || "nenhum"}. Confira com o extrato da maquininha e do banco.
         </p>

@@ -65,6 +65,19 @@ const ROTULOS: Record<string, string> = {
   taxa_bp: "Taxa",
   motivo: "Motivo",
   fornecedor: "Fornecedor",
+  precos_quantidade: "Preço por quantidade",
+  lote_producao: "Lote de produção",
+  fabricado: "Produzido pela loja",
+  senha: "Senha",
+  senha_atual: "Senha atual",
+  nova_senha: "Nova senha",
+  perfil: "Perfil",
+  permissoes: "Permissões",
+  usuario_id: "Usuário",
+  dias_alvo: "Dias de estoque",
+  dias_historico: "Dias de vendas",
+  alerta_dias: "Aviso de estoque",
+  comprovante_largura: "Largura do papel",
 };
 
 export function validar<T extends z.ZodType>(esquema: T, dados: unknown): z.output<T> {
@@ -103,6 +116,10 @@ const zCodigo = z
   .transform((s) => (s ? s : null));
 export const zOrigem = z.enum(["gaveta", "conta"]);
 
+export const zFaixasPreco = z
+  .array(z.object({ quantidade: zQuantidade, preco_centavos: zCentavosPositivo }))
+  .max(10);
+
 const zBaseProduto = z.object({
   nome: zTextoObrigatorio(120),
   categoria: zTexto(60),
@@ -114,6 +131,9 @@ const zBaseProduto = z.object({
   estoque_minimo: zQuantidadeOuZero.default(0),
   controla_estoque: z.boolean().default(true),
   observacao: zTexto(500),
+  fabricado: z.boolean().optional(),
+  lote_producao: zQuantidadeOuZero.optional(),
+  precos_quantidade: zFaixasPreco.optional(),
 });
 export const zNovoProduto = zBaseProduto.extend({ estoque_inicial: zQuantidadeOuZero.default(0) });
 export const zEdicaoProduto = zBaseProduto.extend({ ativo: z.boolean().optional() });
@@ -209,3 +229,41 @@ export const zAjuste = z.union([
   z.object({ produto_id: zId, tipo: z.literal("contagem"), nova_quantidade: zQuantidadeOuZero, observacao: zTexto(200) }),
   z.object({ produto_id: zId, tipo: z.enum(["perda", "brinde", "uso"]), quantidade: zQuantidade, observacao: zTexto(200) }),
 ]);
+
+export const zFabricado = z.object({ fabricado: z.boolean() });
+
+export const zProducao = z.object({
+  itens: z
+    .array(z.object({ produto_id: zId, quantidade: zQuantidade, custo_unitario_centavos: zCentavos }))
+    .min(1)
+    .max(200),
+  observacao: zTexto(300),
+});
+
+export const zParametrosProducao = z.object({
+  dias_alvo: z.number().int().optional(),
+  dias_historico: z.number().int().optional(),
+  alerta_dias: z.number().int().optional(),
+});
+
+const zSenha = z.string().max(200);
+const zPerfil = z.enum(["administrador", "funcionario"]);
+const zPermissoes = z.array(z.enum(["desconto", "cancelar_venda", "produtos", "financeiro"])).max(10);
+
+export const zPrimeiroAcesso = z.object({ nome: zTextoObrigatorio(40), senha: zSenha });
+export const zEntrar = z.object({ usuario_id: zId, senha: zSenha });
+export const zMinhaSenha = z.object({ senha_atual: zSenha, nova_senha: zSenha });
+export const zRecuperar = z.object({ usuario_id: zId, codigo: z.string().max(60), nova_senha: zSenha });
+export const zNovoUsuario = z.object({
+  nome: zTextoObrigatorio(40),
+  perfil: zPerfil,
+  permissoes: zPermissoes.default([]),
+  senha: zSenha,
+});
+export const zEdicaoUsuario = z.object({
+  nome: zTextoObrigatorio(40).optional(),
+  perfil: zPerfil.optional(),
+  permissoes: zPermissoes.optional(),
+  ativo: z.boolean().optional(),
+});
+export const zSenhaUsuario = z.object({ senha: zSenha });

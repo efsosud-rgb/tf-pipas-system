@@ -10,6 +10,11 @@ export interface UnidadeInfo {
 
 export type SituacaoEstoque = "sem_controle" | "negativo" | "zerado" | "baixo" | "ok";
 
+export interface FaixaPreco {
+  quantidade: number;
+  preco_centavos: number;
+}
+
 export interface Produto {
   id: number;
   nome: string;
@@ -29,6 +34,9 @@ export interface Produto {
   observacao: string;
   criado_em: string;
   atualizado_em: string;
+  fabricado: boolean;
+  lote_producao: number;
+  precos_quantidade: FaixaPreco[];
 }
 
 export interface HistoricoProduto {
@@ -74,12 +82,105 @@ export interface Config {
   permitir_estoque_negativo: boolean;
 }
 
+export type Permissao = "vender" | "desconto" | "cancelar_venda" | "produtos" | "financeiro" | "administrar";
+export type Perfil = "administrador" | "funcionario";
+
+export interface Usuario {
+  id: number;
+  nome: string;
+  perfil: Perfil;
+  permissoes: Permissao[];
+  ativo: boolean;
+  criado_em: string;
+  atualizado_em: string;
+  ultimo_acesso_em: string | null;
+}
+
+export interface EstadoAuth {
+  primeiro_acesso: boolean;
+  usuarios: Array<{ id: number; nome: string; perfil: Perfil }>;
+  usuario: Usuario | null;
+  loja_nome: string;
+}
+
+export interface PainelRapido {
+  hoje: string;
+  vendas: {
+    quantidade: number;
+    total_centavos: number;
+    ticket_medio_centavos: number | null;
+    canceladas_quantidade: number;
+    canceladas_total_centavos: number;
+  };
+  por_forma: Array<{ forma_id: number; nome: string; tipo: string; vendas: number; valor_centavos: number }>;
+  caixa: { sessao_id: number; aberto_em: string; operador: string; dinheiro_na_gaveta_centavos: number } | null;
+  produtos_ativos: number;
+  alertas_estoque: number;
+  sugestoes_producao: number;
+}
+
+export type MotivoSugestao = "negativo" | "zerado" | "abaixo_minimo" | "cobertura_curta";
+
+export interface AlertaEstoque {
+  produto_id: number;
+  nome: string;
+  unidade: Unidade;
+  fabricado: boolean;
+  estoque: number;
+  estoque_minimo: number;
+  cobertura_dias: number | null;
+  motivo: MotivoSugestao;
+  texto: string;
+}
+
+export interface ParametrosProducao {
+  dias_alvo: number;
+  dias_historico: number;
+  alerta_dias: number;
+}
+
+export interface ItemSugestao {
+  produto_id: number;
+  nome: string;
+  categoria: string;
+  unidade: Unidade;
+  fabricado: boolean;
+  estoque: number;
+  estoque_minimo: number;
+  lote: number;
+  vendido_periodo: number;
+  dias_considerados: number;
+  media_diaria: number | null;
+  cobertura_dias: number | null;
+  alvo: number;
+  sugestao: number;
+  custo_unitario_centavos: number;
+  custo_estimado_centavos: number;
+  motivo: MotivoSugestao | null;
+  pouco_historico: boolean;
+}
+
+export interface SugestaoProducao {
+  parametros: ParametrosProducao;
+  de: string;
+  ate: string;
+  itens: ItemSugestao[];
+  resumo: {
+    produzir_itens: number;
+    produzir_custo_centavos: number;
+    comprar_itens: number;
+    comprar_custo_centavos: number;
+    sem_ritmo: number;
+  };
+}
+
 export interface ItemVenda {
   produto_id: number;
   nome: string;
   unidade: string;
   quantidade: number;
   preco_unitario_centavos: number;
+  preco_base_centavos: number | null;
   custo_unitario_centavos: number;
   subtotal_centavos: number;
   desconto_centavos: number;
@@ -117,8 +218,13 @@ export interface Venda {
   cancelada_em: string | null;
   motivo_cancelamento: string;
   sessao_cancelamento_id: number | null;
+  usuario_nome: string;
+  usuario_id: number | null;
+  cancelada_por: string;
   itens: ItemVenda[];
   pagamentos: PagamentoVenda[];
+  /** Só na resposta de uma venda nova: produtos que ficaram no mínimo ou zerados. */
+  alertas_estoque?: Array<{ produto_id: number; nome: string; unidade: string; estoque: number; estoque_minimo: number; situacao: "baixo" | "zerado" | "negativo" }>;
 }
 
 export interface VendaNaLista {
@@ -136,6 +242,7 @@ export interface VendaNaLista {
   itens_quantidade: number;
   formas: string;
   sessao_id: number;
+  usuario_nome: string;
 }
 
 export type TipoMovimentoCaixa = "abertura" | "venda" | "sangria" | "suprimento" | "cancelamento" | "despesa" | "receita";
@@ -196,6 +303,7 @@ export interface ResumoCaixa {
     venda_id: number | null;
     lancamento_id: number | null;
     criado_em: string;
+    usuario_nome: string;
   }>;
 }
 
@@ -344,6 +452,8 @@ export interface RelatorioEstoque {
 
 export interface Entrada {
   id: number;
+  tipo: "compra" | "producao";
+  usuario_nome: string;
   fornecedor: string;
   total_centavos: number;
   lancamento_id: number | null;
@@ -361,6 +471,7 @@ export interface Entrada {
     custo_medio_depois_centavos: number;
   }>;
   itens_quantidade?: number;
+  quantidade_total?: number;
 }
 
 export interface PainelInicio {
@@ -420,7 +531,7 @@ export interface InfoBackup {
   nome: string;
   data: string;
   hora: string;
-  motivo: "automatico" | "manual" | "fechamento" | "antes-de-restaurar" | "desligamento";
+  motivo: "automatico" | "manual" | "fechamento" | "antes-de-restaurar" | "desligamento" | "antes-de-atualizar";
   tamanho_bytes: number;
 }
 
@@ -430,4 +541,58 @@ export interface Saude {
   pasta_dados: string;
   hoje: string;
   agora: string;
+}
+
+export interface DiaDoFluxo {
+  data: string;
+  futuro: boolean;
+  entradas: { vendas_centavos: number; receitas_centavos: number; total_centavos: number };
+  saidas: { taxas_centavos: number; despesas_centavos: number; total_centavos: number };
+  saldo_dia_centavos: number;
+  acumulado_centavos: number;
+  previsto: { a_receber_centavos: number; a_pagar_centavos: number };
+  acumulado_previsto_centavos: number;
+}
+
+export interface FluxoDiario {
+  de: string;
+  ate: string;
+  hoje: string;
+  dias: DiaDoFluxo[];
+  totais: { entradas_centavos: number; saidas_centavos: number; saldo_centavos: number; a_receber_centavos: number; a_pagar_centavos: number };
+  atrasadas: { a_receber_centavos: number; a_pagar_centavos: number; quantidade: number };
+}
+
+export interface ResultadoDoMes {
+  mes: string;
+  de: string;
+  ate: string;
+  vendas: number;
+  bruto_centavos: number;
+  descontos_centavos: number;
+  receita_centavos: number;
+  cmv_centavos: number;
+  lucro_bruto_centavos: number;
+  margem_bruta_bp: number | null;
+  taxas_centavos: number;
+  perdas_centavos: number;
+  outras_receitas_centavos: number;
+  despesas_centavos: number;
+  despesas_por_categoria: Array<{ categoria_id: number; nome: string; total_centavos: number }>;
+  lucro_liquido_centavos: number;
+  margem_liquida_bp: number | null;
+}
+
+export interface RelatorioVendedores {
+  de: string;
+  ate: string;
+  vendedores: Array<{
+    nome: string;
+    vendas: number;
+    total_centavos: number;
+    lucro_bruto_centavos: number;
+    descontos_centavos: number;
+    ticket_medio_centavos: number | null;
+  }>;
+  cancelamentos: Array<{ nome: string; quantidade: number }>;
 }

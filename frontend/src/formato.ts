@@ -62,6 +62,11 @@ export function quantidade(n: number | null | undefined, unidade?: string): stri
   return unidade ? `${texto} ${unidade}` : texto;
 }
 
+/** Quantidade para um campo de digitação: sem separador de milhar ("1000", "1,5"), para ler de volta sem erro. */
+export function quantidadeParaCampo(n: number): string {
+  return n.toLocaleString("pt-BR", { maximumFractionDigits: 3, useGrouping: false });
+}
+
 /** 6570 pontos-base → "65,7%". null → "—". */
 export function porcento(bp: number | null | undefined, casas = 1): string {
   if (bp === null || bp === undefined || !Number.isFinite(bp)) return "—";

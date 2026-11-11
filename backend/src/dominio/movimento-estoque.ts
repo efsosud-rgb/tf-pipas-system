@@ -4,6 +4,7 @@ import { agoraIso, dataLocal } from "../relogio";
 export type TipoMovimentoEstoque =
   | "inicial"
   | "entrada"
+  | "producao"
   | "venda"
   | "cancelamento"
   | "contagem"

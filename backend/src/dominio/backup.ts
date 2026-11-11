@@ -12,9 +12,9 @@ import { agora, dataLocal } from "../relogio";
  * sistema em uso. As mais antigas são apagadas para não encher o disco.
  */
 
-export type MotivoBackup = "automatico" | "manual" | "fechamento" | "antes-de-restaurar" | "desligamento";
+export type MotivoBackup = "automatico" | "manual" | "fechamento" | "antes-de-restaurar" | "desligamento" | "antes-de-atualizar";
 
-const RE_NOME = /^tfpipas-(\d{4}-\d{2}-\d{2})-(\d{6})(?:-\d+)?-(automatico|manual|fechamento|antes-de-restaurar|desligamento)\.db$/;
+const RE_NOME = /^tfpipas-(\d{4}-\d{2}-\d{2})-(\d{6})(?:-\d+)?-(automatico|manual|fechamento|antes-de-restaurar|desligamento|antes-de-atualizar)\.db$/;
 const MANTER = 90;
 
 export interface InfoBackup {

@@ -6,7 +6,7 @@ import { FiltroPeriodo, periodoDoMes, type Periodo } from "../componentes/period
 import { AvisoErro, Botao, Cabecalho, Carregando, Cartao, cx, Etiqueta, Kpi, Vazio } from "../componentes/ui";
 import { data, plural, porcento, quantidade, reais } from "../formato";
 import { useApi } from "../hooks";
-import type { RelatorioEstoque, RelatorioFormas, RelatorioProdutos, RelatorioTempo, Resultado } from "../tipos";
+import type { LinhaProdutoVendido, RelatorioEstoque, RelatorioFormas, RelatorioProdutos, RelatorioTempo, RelatorioVendedores, Resultado } from "../tipos";
 
 function baixarCsv(nome: string, cabecalho: string[], linhas: Array<Array<string | number>>) {
   const esc = (v: string | number) => {
@@ -32,6 +32,7 @@ export default function Relatorios() {
   const produtos = useApi<RelatorioProdutos>(`/api/relatorios/produtos${q}`);
   const formas = useApi<RelatorioFormas>(`/api/relatorios/formas${q}`);
   const estoque = useApi<RelatorioEstoque>("/api/relatorios/estoque");
+  const vendedores = useApi<RelatorioVendedores>(`/api/relatorios/vendedores${q}`);
   const [ordem, setOrdem] = useState<"lucro" | "receita" | "quantidade" | "margem">("lucro");
   const r = resultado.dados;
 
@@ -46,7 +47,25 @@ export default function Relatorios() {
     return l;
   }, [produtos.dados, ordem]);
 
-  const erro = resultado.erro ?? tempo.erro ?? produtos.erro ?? formas.erro;
+  const curva = useMemo(() => curvaAbc(produtos.dados?.produtos ?? []), [produtos.dados]);
+  const categorias = useMemo(() => porCategoria(produtos.dados?.produtos ?? []), [produtos.dados]);
+  const destaques = useMemo(() => {
+    const l = produtos.dados?.produtos ?? [];
+    if (!l.length) return null;
+    const maior = <T,>(f: (x: LinhaProdutoVendido) => T | null) =>
+      l.reduce<LinhaProdutoVendido | null>((m, x) => {
+        const v = f(x);
+        if (v === null) return m;
+        return !m || (v as number) > (f(m) as number) ? x : m;
+      }, null);
+    return {
+      maisVendido: maior((x) => x.receita_centavos > 0 ? x.quantidade : null),
+      maisLucro: maior((x) => x.lucro_centavos),
+      maiorMargem: maior((x) => (x.receita_centavos >= 100_00 ? x.margem_bp : null)),
+    };
+  }, [produtos.dados]);
+
+  const erro = resultado.erro ?? tempo.erro ?? produtos.erro ?? formas.erro ?? vendedores.erro;
   return (
     <div className="flex flex-col gap-5">
       <Cabecalho rotulo="Análise de vendas" titulo="Relatórios" descricao="Tudo calculado a partir das vendas e lançamentos gravados. Vendas canceladas ficam fora das contas." />
@@ -59,8 +78,8 @@ export default function Relatorios() {
         <Kpi rotulo="Ticket médio" valor={reais(r?.vendas.ticket_medio_centavos)} />
         <Kpi rotulo="Lucro bruto" valor={reais(r?.lucro_bruto_centavos)} dica={r ? `margem ${porcento(r.margem_bruta_bp)}` : undefined} />
         <Kpi
-          rotulo="Resultado"
-          valor={reais(r?.lucro_liquido_centavos)}
+          rotulo="Lucro líquido"
+          valor={r ? (r.lucro_liquido_centavos < 0 ? `−${reais(-r.lucro_liquido_centavos)}` : reais(r.lucro_liquido_centavos)) : "—"}
           dica={r ? `margem líquida ${porcento(r.margem_liquida_bp)}` : undefined}
           tom={r ? (r.lucro_liquido_centavos < 0 ? "ruim" : r.lucro_liquido_centavos > 0 ? "bom" : "neutro") : "neutro"}
         />
@@ -76,7 +95,15 @@ export default function Relatorios() {
         )}
       </Cartao>
 
-      <div className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+      {destaques && (
+        <div className="grid gap-3 md:grid-cols-3">
+          <Destaque rotulo="O que mais sai (quantidade)" item={destaques.maisVendido} valor={(x) => quantidade(x.quantidade, x.unidade)} />
+          <Destaque rotulo="O que mais dá lucro" item={destaques.maisLucro} valor={(x) => reais(x.lucro_centavos)} />
+          <Destaque rotulo="Maior margem (vendeu R$ 100+)" item={destaques.maiorMargem} valor={(x) => porcento(x.margem_bp)} />
+        </div>
+      )}
+
+      <div className="grid gap-4 2xl:grid-cols-[1.6fr_1fr]">
         <Cartao
           rotulo="Produtos"
           titulo="O que mais vende e mais dá lucro"
@@ -89,8 +116,8 @@ export default function Relatorios() {
               onClick={() =>
                 baixarCsv(
                   `vendas-por-produto_${periodo.de}_${periodo.ate}.csv`,
-                  ["Produto", "Categoria", "Quantidade", "Unidade", "Faturamento", "Custo", "Lucro bruto", "Margem %"],
-                  lista.map((l) => [l.nome, l.categoria, String(l.quantidade).replace(".", ","), l.unidade, dinheiroCsv(l.receita_centavos), dinheiroCsv(l.custo_centavos), dinheiroCsv(l.lucro_centavos), l.margem_bp === null ? "" : (l.margem_bp / 100).toFixed(2).replace(".", ",")]),
+                  ["Produto", "Categoria", "Quantidade", "Unidade", "Faturamento", "Custo", "Lucro bruto", "Margem %", "Curva ABC"],
+                  lista.map((l) => [l.nome, l.categoria, String(l.quantidade).replace(".", ","), l.unidade, dinheiroCsv(l.receita_centavos), dinheiroCsv(l.custo_centavos), dinheiroCsv(l.lucro_centavos), l.margem_bp === null ? "" : (l.margem_bp / 100).toFixed(2).replace(".", ","), curva.get(l.produto_id) ?? ""]),
                 )
               }
             >
@@ -124,6 +151,9 @@ export default function Relatorios() {
                       </th>
                     ))}
                     <th className="num">Parte do lucro</th>
+                    <th className="num" title="Curva ABC pelo faturamento do período">
+                      Curva
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -149,6 +179,9 @@ export default function Relatorios() {
                           </span>
                         )}
                       </td>
+                      <td className="num">
+                        {curva.get(l.produto_id) ? <Etiqueta tom={curva.get(l.produto_id) === "A" ? "escuro" : curva.get(l.produto_id) === "B" ? "info" : "neutro"}>{curva.get(l.produto_id)}</Etiqueta> : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -160,14 +193,19 @@ export default function Relatorios() {
                     <td className="num px-3">{reais(produtos.dados.totais.lucro_centavos)}</td>
                     <td className="num px-3">{porcento(produtos.dados.totais.margem_bp)}</td>
                     <td />
+                    <td />
                   </tr>
                 </tfoot>
               </table>
+              <p className="border-t border-[#efefeb] px-4 py-3 text-[12px] text-suave">
+                Curva ABC pelo faturamento do período: <b>A</b> = os produtos que somam os primeiros 80% do faturamento, <b>B</b> = os próximos 15%, <b>C</b> = os últimos 5%. Clique
+                nos títulos das colunas para ordenar.
+              </p>
             </div>
           )}
         </Cartao>
 
-        <div className="flex flex-col gap-4">
+        <div className="grid content-start gap-4 lg:grid-cols-2 2xl:grid-cols-1">
           <Cartao rotulo="Meios de recebimento" titulo="Vendas por forma de pagamento" corpo={false}>
             {!formas.dados ? (
               <Carregando />
@@ -197,6 +235,78 @@ export default function Relatorios() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </Cartao>
+          <Cartao rotulo="Rentabilidade" titulo="Por categoria" corpo={false}>
+            {!produtos.dados ? (
+              <Carregando />
+            ) : categorias.length === 0 ? (
+              <Vazio titulo="Sem vendas no período" />
+            ) : (
+              <table className="tabela mt-2">
+                <thead>
+                  <tr>
+                    <th>Categoria</th>
+                    <th className="num">Faturamento</th>
+                    <th className="num">Lucro bruto</th>
+                    <th className="num">Margem</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categorias.map((c) => (
+                    <tr key={c.nome}>
+                      <td>
+                        <p className="font-semibold">{c.nome}</p>
+                        <span className="mt-1 block h-1.5 w-full max-w-[140px] overflow-hidden rounded-full bg-[#ececE8]">
+                          <span className="block h-full rounded-full bg-[#2a78d6]" style={{ width: `${c.parte}%` }} />
+                        </span>
+                      </td>
+                      <td className="num font-semibold">{reais(c.receita)}</td>
+                      <td className={cx("num", c.lucro < 0 && "text-perigo")}>{reais(c.lucro)}</td>
+                      <td className="num">{porcento(c.margem)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Cartao>
+          <Cartao rotulo="Equipe" titulo="Vendas por vendedor" corpo={false}>
+            {!vendedores.dados ? (
+              <Carregando />
+            ) : vendedores.dados.vendedores.length === 0 ? (
+              <Vazio titulo="Sem vendas no período" />
+            ) : (
+              <>
+                <table className="tabela mt-2">
+                  <thead>
+                    <tr>
+                      <th>Vendedor</th>
+                      <th className="num">Vendas</th>
+                      <th className="num">Faturamento</th>
+                      <th className="num">Ticket</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vendedores.dados.vendedores.map((v) => (
+                      <tr key={v.nome || "-"}>
+                        <td className="font-semibold">{v.nome || <span className="font-normal text-suave">antes dos usuários</span>}</td>
+                        <td className="num">{v.vendas}</td>
+                        <td className="num font-semibold">
+                          {reais(v.total_centavos)}
+                          {v.descontos_centavos > 0 && <span className="block text-[11.5px] font-normal text-suave">descontos {reais(v.descontos_centavos)}</span>}
+                        </td>
+                        <td className="num">{reais(v.ticket_medio_centavos)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {vendedores.dados.cancelamentos.length > 0 && (
+                  <p className="border-t border-[#efefeb] px-4 py-3 text-[12px] text-suave">
+                    Cancelamentos no período:{" "}
+                    {vendedores.dados.cancelamentos.map((c) => `${c.nome || "sem usuário"} (${c.quantidade})`).join(" · ")}
+                  </p>
+                )}
+              </>
             )}
           </Cartao>
           <Cartao rotulo="Hoje" titulo="Estoque parado na loja">
@@ -244,6 +354,53 @@ export default function Relatorios() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Curva ABC pelo faturamento: A até 80% acumulado, B até 95%, C o resto. */
+function curvaAbc(produtos: LinhaProdutoVendido[]): Map<number, "A" | "B" | "C"> {
+  const lista = [...produtos].filter((p) => p.receita_centavos > 0).sort((a, b) => b.receita_centavos - a.receita_centavos);
+  const total = lista.reduce((s, p) => s + p.receita_centavos, 0);
+  const mapa = new Map<number, "A" | "B" | "C">();
+  let acumulado = 0;
+  for (const p of lista) {
+    // a classe é decidida pelo acumulado ANTES do produto: o que cruza os 80% ainda é A
+    const antes = total > 0 ? acumulado / total : 0;
+    mapa.set(p.produto_id, antes < 0.8 ? "A" : antes < 0.95 ? "B" : "C");
+    acumulado += p.receita_centavos;
+  }
+  return mapa;
+}
+
+function porCategoria(produtos: LinhaProdutoVendido[]) {
+  const mapa = new Map<string, { nome: string; receita: number; lucro: number }>();
+  for (const p of produtos) {
+    const nome = p.categoria || "Sem categoria";
+    const c = mapa.get(nome) ?? { nome, receita: 0, lucro: 0 };
+    c.receita += p.receita_centavos;
+    c.lucro += p.lucro_centavos;
+    mapa.set(nome, c);
+  }
+  const lista = [...mapa.values()].sort((a, b) => b.receita - a.receita);
+  const maior = Math.max(1, ...lista.map((c) => c.receita));
+  return lista.map((c) => ({ ...c, margem: c.receita > 0 ? Math.round((c.lucro * 10_000) / c.receita) : null, parte: Math.max(2, (c.receita / maior) * 100) }));
+}
+
+function Destaque({ rotulo, item, valor }: { rotulo: string; item: LinhaProdutoVendido | null; valor: (x: LinhaProdutoVendido) => string }) {
+  return (
+    <div className="rounded-[16px] border border-borda/80 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+      <p className="rotulo">{rotulo}</p>
+      {item ? (
+        <>
+          <p className="mt-1.5 truncate text-[15px] font-bold text-tinta" title={item.nome}>
+            {item.nome}
+          </p>
+          <p className="text-[13px] text-suave">{valor(item)}</p>
+        </>
+      ) : (
+        <p className="mt-1.5 text-[13px] text-suave">—</p>
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
-export type Rota = "inicio" | "pdv" | "produtos" | "caixa" | "vendas" | "financeiro" | "relatorios" | "configuracoes";
+export type Rota = "inicio" | "pdv" | "produtos" | "producao" | "caixa" | "vendas" | "financeiro" | "relatorios" | "configuracoes";
 
-export const ROTAS: Rota[] = ["inicio", "pdv", "produtos", "caixa", "vendas", "financeiro", "relatorios", "configuracoes"];
+export const ROTAS: Rota[] = ["inicio", "pdv", "produtos", "producao", "caixa", "vendas", "financeiro", "relatorios", "configuracoes"];
 
 export function lerRota(): Rota {
   const r = window.location.hash.replace(/^#\/?/, "").split("?")[0] as Rota;

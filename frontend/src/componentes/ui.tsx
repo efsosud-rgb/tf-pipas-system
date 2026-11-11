@@ -416,26 +416,35 @@ export function Modal({
   lado?: boolean;
 }) {
   const painel = useRef<HTMLDivElement>(null);
+  // a função de fechar muda a cada desenho do pai; guardada num ref, o efeito
+  // abaixo roda só ao abrir — senão o foco pularia para o primeiro campo a
+  // cada tecla digitada (e o texto iria parar no campo errado)
+  const fechar = useRef(aoFechar);
+  useEffect(() => {
+    fechar.current = aoFechar;
+  });
   useEffect(() => {
     if (!aberto) return;
     const anterior = document.activeElement as HTMLElement | null;
     const ouvir = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        aoFechar();
+        fechar.current();
       }
     };
     window.addEventListener("keydown", ouvir, true);
-    // foca o primeiro campo (ou o painel)
-    requestAnimationFrame(() => {
+    // foca o primeiro campo (ou o painel), sem tirar o foco de quem já está num campo do modal
+    const quadro = requestAnimationFrame(() => {
+      if (painel.current?.contains(document.activeElement)) return;
       const alvo = painel.current?.querySelector<HTMLElement>("[data-foco-inicial], input:not([type=hidden]):not([disabled]), select, textarea");
       (alvo ?? painel.current)?.focus();
     });
     return () => {
+      cancelAnimationFrame(quadro);
       window.removeEventListener("keydown", ouvir, true);
       anterior?.focus?.();
     };
-  }, [aberto, aoFechar]);
+  }, [aberto]);
   if (!aberto) return null;
   const larguras = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-3xl", xl: "max-w-5xl" };
   return createPortal(
@@ -500,3 +509,37 @@ export function Linha({ rotulo, valor, forte, tom, recuo }: { rotulo: ReactNode;
     </div>
   );
 }
+
+/** Campo de senha com botão de mostrar/esconder. */
+export const CampoSenha = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { invalido?: boolean; escuro?: boolean }>(
+  function CampoSenha({ className, invalido, escuro, ...resto }, ref) {
+    const [visivel, setVisivel] = useState(false);
+    return (
+      <div className="relative">
+        <input
+          ref={ref}
+          type={visivel ? "text" : "password"}
+          autoComplete="off"
+          spellCheck={false}
+          className={cx(
+            escuro
+              ? "h-12 w-full rounded-xl border border-white/15 bg-white/[.08] pr-12 pl-4 text-[16px] text-white placeholder:text-white/35 focus:border-white/45 focus:ring-4 focus:ring-white/10 focus:outline-none"
+              : cx(ESTILO_CAMPO, "h-10 pr-11"),
+            invalido && (escuro ? "border-[#ff8a8a]/70" : "border-perigo"),
+            className,
+          )}
+          {...resto}
+        />
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => setVisivel((v) => !v)}
+          aria-label={visivel ? "Esconder a senha" : "Mostrar a senha"}
+          className={cx("absolute top-1/2 right-2 -translate-y-1/2 rounded-lg px-2 py-1 text-[11.5px] font-semibold", escuro ? "text-white/55 hover:text-white" : "text-suave hover:text-tinta")}
+        >
+          {visivel ? "esconder" : "mostrar"}
+        </button>
+      </div>
+    );
+  },
+);

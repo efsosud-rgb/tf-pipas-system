@@ -4,6 +4,12 @@
  * impede outro site aberto no navegador de mexer nos dados da loja.
  */
 
+/** Avisado quando o servidor responde 401 (sessão vencida). Ligado em auth.ts. */
+let aoPerderSessao: (() => void) | null = null;
+export function quandoPerderSessao(fn: () => void): void {
+  aoPerderSessao = fn;
+}
+
 export class ErroApi extends Error {
   readonly status: number;
   readonly campo: string | null;
@@ -38,7 +44,8 @@ async function pedir<T>(metodo: string, caminho: string, corpo?: unknown): Promi
   const tipo = resposta.headers.get("content-type") ?? "";
   const dados = tipo.includes("application/json") ? await resposta.json().catch(() => null) : null;
   if (!resposta.ok) {
-    const d = dados as { erro?: string; campo?: string | null } | null;
+    const d = dados as { erro?: string; campo?: string | null; sessao?: boolean } | null;
+    if (resposta.status === 401 && d?.sessao === false) aoPerderSessao?.();
     throw new ErroApi(d?.erro ?? `O sistema respondeu com erro (${resposta.status}).`, resposta.status, d?.campo ?? null);
   }
   return dados as T;

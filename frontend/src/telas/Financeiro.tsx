@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowUpRight, CalendarClock, Check, Pencil, Plus, Trash
 import { useMemo, useState } from "react";
 import { api, consulta, ErroApi, mensagemDeErro } from "../api";
 import { avisar, confirmar } from "../componentes/avisos";
+import { GraficoLucroMensal, GraficoSaldo } from "../componentes/grafico-financeiro";
 import { FiltroPeriodo, periodoDoMes, type Periodo } from "../componentes/periodo";
 import {
   Abas,
@@ -15,15 +16,16 @@ import {
   cx,
   Entrada,
   Etiqueta,
+  Interruptor,
   Kpi,
   Linha,
   Modal,
   Selecao,
   Vazio,
 } from "../componentes/ui";
-import { data, hojeLocal, plural, porcento, reais, reaisSaida, relativoAoDia } from "../formato";
+import { data, hojeLocal, mesAno, plural, porcento, primeiroDiaDoMes, reais, reaisSaida, relativoAoDia, somarMeses, ultimoDiaDoMes } from "../formato";
 import { avisarMudanca, useApi } from "../hooks";
-import type { Categoria, ContasPendentes, Lancamento, Origem, Resultado, ResumoFinanceiro, TipoLancamento } from "../tipos";
+import type { Categoria, ContasPendentes, FluxoDiario, Lancamento, Origem, Resultado, ResultadoDoMes, ResumoFinanceiro, TipoLancamento } from "../tipos";
 
 type Aba = "pagar" | "receber" | "lancamentos" | "fluxo" | "dre";
 
@@ -296,47 +298,147 @@ function AbaLancamentos({ periodo, aoPeriodo, acoes }: { periodo: Periodo; aoPer
 }
 
 function AbaFluxo({ periodo, aoPeriodo }: { periodo: Periodo; aoPeriodo: (p: Periodo) => void }) {
+  const fluxo = useApi<FluxoDiario>(`/api/financeiro/fluxo-diario${consulta(periodo)}`);
   const r = useApi<ResumoFinanceiro>(`/api/financeiro/resumo${consulta(periodo)}`);
-  const f = r.dados;
+  const [soMovimento, setSoMovimento] = useState(true);
+  const f = fluxo.dados;
+  const linhas = useMemo(() => {
+    if (!f) return [];
+    return f.dias.filter(
+      (d) =>
+        !soMovimento ||
+        d.data === f.hoje ||
+        d.entradas.total_centavos > 0 ||
+        d.saidas.total_centavos > 0 ||
+        d.previsto.a_receber_centavos > 0 ||
+        d.previsto.a_pagar_centavos > 0,
+    );
+  }, [f, soMovimento]);
+  const previstoLiquido = f ? f.totais.a_receber_centavos - f.totais.a_pagar_centavos : 0;
+  const temFuturo = !!f && f.ate >= f.hoje;
+
   return (
     <div className="flex flex-col gap-4">
       <FiltroPeriodo valor={periodo} aoMudar={aoPeriodo} />
-      {r.erro && <AvisoErro mensagem={r.erro} />}
+      {fluxo.erro && <AvisoErro mensagem={fluxo.erro} aoTentar={fluxo.recarregar} />}
       {!f ? (
-        <Carregando />
+        fluxo.erro ? null : <Carregando />
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <Kpi rotulo="Entradas realizadas" valor={reais(f.entradas.total_centavos)} tom="bom" />
-            <Kpi rotulo="Saídas realizadas" valor={reais(f.saidas.total_centavos)} />
-            <Kpi rotulo="Saldo do período" valor={reais(f.saldo_centavos)} tom={f.saldo_centavos < 0 ? "ruim" : "neutro"} />
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <Kpi rotulo="Entradas realizadas" valor={reais(f.totais.entradas_centavos)} dica="vendas + receitas recebidas" tom="bom" />
+            <Kpi rotulo="Saídas realizadas" valor={reais(f.totais.saidas_centavos)} dica="taxas + despesas pagas" />
+            <Kpi rotulo="Saldo realizado" valor={reaisComSinal(f.totais.saldo_centavos)} dica="entradas − saídas no período" tom={f.totais.saldo_centavos < 0 ? "ruim" : "neutro"} />
+            <Kpi
+              rotulo={temFuturo ? `Previsto até ${data(f.ate).slice(0, 5)}` : "Previsto"}
+              valor={temFuturo ? reaisComSinal(previstoLiquido) : "—"}
+              dica={temFuturo ? `a receber ${reais(f.totais.a_receber_centavos)} · a pagar ${reais(f.totais.a_pagar_centavos)}` : "o período já terminou"}
+              tom={previstoLiquido < 0 ? "ruim" : "neutro"}
+            />
           </div>
-          <div className="grid gap-4 xl:grid-cols-2">
-            <Cartao rotulo="Entrou" titulo="Entradas">
-              <div className="divide-y divide-[#efefeb] text-[14px]">
-                <Linha rotulo="Vendas (frente de caixa)" valor={reais(f.entradas.vendas_centavos)} />
-                <Linha rotulo="Outras receitas recebidas" valor={reais(f.entradas.receitas_centavos)} />
-                <Linha rotulo="Total" valor={reais(f.entradas.total_centavos)} forte />
-              </div>
-            </Cartao>
-            <Cartao rotulo="Saiu" titulo="Saídas">
-              <div className="divide-y divide-[#efefeb] text-[14px]">
-                <Linha rotulo="Taxas das maquininhas e PIX" valor={reais(f.saidas.taxas_centavos)} />
-                {f.saidas.por_categoria.map((c) => (
-                  <Linha key={c.categoria_id} rotulo={c.nome} valor={reais(c.total_centavos)} />
-                ))}
-                <Linha rotulo="Total" valor={reais(f.saidas.total_centavos)} forte />
-              </div>
-            </Cartao>
-          </div>
-          <Cartao rotulo="Ainda não aconteceu" titulo="Pendentes com vencimento no período">
-            <div className="divide-y divide-[#efefeb] text-[14px]">
-              <Linha rotulo="A receber" valor={reais(f.pendentes_no_periodo.a_receber_centavos)} />
-              <Linha rotulo="A pagar" valor={reais(f.pendentes_no_periodo.a_pagar_centavos)} />
+          {f.atrasadas.quantidade > 0 && (
+            <p className="rounded-2xl border border-[#f1d9a8] bg-[#fff8ea] px-4 py-3 text-[13px] text-[#7a4a00]">
+              {plural(f.atrasadas.quantidade, "conta vencida", "contas vencidas")} em aberto (a receber {reais(f.atrasadas.a_receber_centavos)} · a pagar{" "}
+              {reais(f.atrasadas.a_pagar_centavos)}). Elas não entram na previsão dia a dia porque o vencimento já passou — veja em Contas a pagar / a receber.
+            </p>
+          )}
+          <Cartao rotulo={`Começa em R$ 0,00 em ${data(f.de)} — não é o saldo do banco`} titulo="Saldo acumulado do período">
+            <GraficoSaldo dias={f.dias} hoje={f.hoje} />
+          </Cartao>
+          <Cartao
+            corpo={false}
+            rotulo="Dia a dia"
+            titulo="Entradas e saídas por dia"
+            acoes={<Interruptor ligado={soMovimento} aoMudar={setSoMovimento} rotulo="Só dias com movimento" />}
+          >
+            <div className="mt-3 overflow-x-auto">
+              {linhas.length === 0 ? (
+                <Vazio titulo="Nenhum movimento no período" texto="Vendas, despesas pagas e receitas recebidas aparecem aqui pelo dia em que aconteceram." />
+              ) : (
+                <table className="tabela">
+                  <thead>
+                    <tr>
+                      <th>Dia</th>
+                      <th className="num">Entradas</th>
+                      <th className="num">Saídas</th>
+                      <th className="num">Saldo do dia</th>
+                      <th className="num">Acumulado</th>
+                      <th className="num">A receber (aberto)</th>
+                      <th className="num">A pagar (aberto)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {linhas.map((d) => (
+                      <tr key={d.data} className={cx(d.futuro && "text-[#6c6f75]", d.data === f.hoje && "bg-[#f7f7f4]")}>
+                        <td className="font-semibold whitespace-nowrap">
+                          {data(d.data)}
+                          {d.data === f.hoje && <span className="ml-1.5 text-[11px] font-bold text-suave">hoje</span>}
+                          {d.futuro && <span className="ml-1.5 text-[11px] text-suave">previsão</span>}
+                        </td>
+                        <td className="num">
+                          {d.futuro ? (
+                            "—"
+                          ) : (
+                            <>
+                              {reais(d.entradas.total_centavos)}
+                              {d.entradas.receitas_centavos > 0 && (
+                                <span className="block text-[11.5px] text-suave">
+                                  vendas {reais(d.entradas.vendas_centavos)} · outras {reais(d.entradas.receitas_centavos)}
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td className="num">
+                          {d.futuro ? (
+                            "—"
+                          ) : (
+                            <>
+                              {reais(d.saidas.total_centavos)}
+                              {d.saidas.taxas_centavos > 0 && (
+                                <span className="block text-[11.5px] text-suave">
+                                  taxas {reais(d.saidas.taxas_centavos)} · despesas {reais(d.saidas.despesas_centavos)}
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td className={cx("num font-semibold", d.saldo_dia_centavos < 0 && "text-perigo")}>{d.futuro ? "—" : reaisComSinal(d.saldo_dia_centavos)}</td>
+                        <td className={cx("num", (d.futuro ? d.acumulado_previsto_centavos : d.acumulado_centavos) < 0 && "text-perigo")}>
+                          {reaisComSinal(d.futuro ? d.acumulado_previsto_centavos : d.acumulado_centavos)}
+                        </td>
+                        <td className="num">{d.previsto.a_receber_centavos ? reais(d.previsto.a_receber_centavos) : "—"}</td>
+                        <td className="num">{d.previsto.a_pagar_centavos ? reais(d.previsto.a_pagar_centavos) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </Cartao>
+          {r.dados && (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Cartao rotulo="Entrou no período" titulo="Entradas">
+                <div className="divide-y divide-[#efefeb] text-[14px]">
+                  <Linha rotulo="Vendas (frente de caixa)" valor={reais(r.dados.entradas.vendas_centavos)} />
+                  <Linha rotulo="Outras receitas recebidas" valor={reais(r.dados.entradas.receitas_centavos)} />
+                  <Linha rotulo="Total" valor={reais(r.dados.entradas.total_centavos)} forte />
+                </div>
+              </Cartao>
+              <Cartao rotulo="Saiu no período" titulo="Saídas por categoria">
+                <div className="divide-y divide-[#efefeb] text-[14px]">
+                  <Linha rotulo="Taxas das maquininhas e PIX" valor={reais(r.dados.saidas.taxas_centavos)} />
+                  {r.dados.saidas.por_categoria.map((c) => (
+                    <Linha key={c.categoria_id} rotulo={c.nome} valor={reais(c.total_centavos)} />
+                  ))}
+                  <Linha rotulo="Total" valor={reais(r.dados.saidas.total_centavos)} forte />
+                </div>
+              </Cartao>
+            </div>
+          )}
           <p className="text-[12px] text-suave">
-            Fluxo de caixa = dinheiro que de fato entrou e saiu, pela data da venda e pela data do pagamento. As taxas são as calculadas com as porcentagens cadastradas em Configurações.
+            Fluxo de caixa = dinheiro que de fato entrou e saiu, pela data da venda e pela data do pagamento. A previsão usa só as contas em aberto lançadas no Financeiro, pelo
+            vencimento. As taxas são calculadas com as porcentagens cadastradas em Configurações.
           </p>
         </>
       )}
@@ -344,13 +446,132 @@ function AbaFluxo({ periodo, aoPeriodo }: { periodo: Periodo; aoPeriodo: (p: Per
   );
 }
 
+function reaisComSinal(centavos: number): string {
+  return centavos < 0 ? `−${reais(-centavos)}` : reais(centavos);
+}
+
 function AbaDre({ periodo, aoPeriodo }: { periodo: Periodo; aoPeriodo: (p: Periodo) => void }) {
-  const r = useApi<Resultado>(`/api/relatorios/resultado${consulta(periodo)}`);
+  const [visao, setVisao] = useState<"periodo" | "meses">("periodo");
+  const [meses, setMeses] = useState(12);
+  const r = useApi<Resultado>(visao === "periodo" ? `/api/relatorios/resultado${consulta(periodo)}` : null);
+  const hoje = hojeLocal();
+  const deMeses = primeiroDiaDoMes(somarMeses(hoje, -(meses - 1)));
+  const mensal = useApi<ResultadoDoMes[]>(visao === "meses" ? `/api/relatorios/resultado-mensal${consulta({ de: deMeses, ate: ultimoDiaDoMes(hoje) })}` : null);
   return (
     <div className="flex flex-col gap-4">
-      <FiltroPeriodo valor={periodo} aoMudar={aoPeriodo} />
-      {r.erro && <AvisoErro mensagem={r.erro} />}
-      {!r.dados ? <Carregando /> : <Dre r={r.dados} />}
+      <div className="flex flex-wrap items-center gap-3">
+        <Abas
+          abas={[
+            { id: "periodo", rotulo: "Período escolhido" },
+            { id: "meses", rotulo: "Mês a mês" },
+          ]}
+          ativa={visao}
+          aoMudar={setVisao}
+        />
+        {visao === "meses" && (
+          <div className="inline-flex gap-1 rounded-xl border border-borda bg-white p-1 text-[12.5px] font-semibold">
+            {[6, 12, 24].map((q) => (
+              <button
+                key={q}
+                type="button"
+                aria-pressed={meses === q}
+                onClick={() => setMeses(q)}
+                className={cx("rounded-lg px-2.5 py-1", meses === q ? "bg-tinta text-white" : "text-[#5f6268] hover:text-tinta")}
+              >
+                Últimos {q} meses
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {visao === "periodo" ? (
+        <>
+          <FiltroPeriodo valor={periodo} aoMudar={aoPeriodo} />
+          {r.erro && <AvisoErro mensagem={r.erro} aoTentar={r.recarregar} />}
+          {!r.dados ? r.erro ? null : <Carregando /> : <Dre r={r.dados} />}
+        </>
+      ) : (
+        <>
+          {mensal.erro && <AvisoErro mensagem={mensal.erro} aoTentar={mensal.recarregar} />}
+          {!mensal.dados ? mensal.erro ? null : <Carregando /> : <ResultadoMesAMes meses={mensal.dados} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ResultadoMesAMes({ meses }: { meses: ResultadoDoMes[] }) {
+  const soma = (f: (m: ResultadoDoMes) => number) => meses.reduce((s, m) => s + f(m), 0);
+  const receita = soma((m) => m.receita_centavos);
+  const liquido = soma((m) => m.lucro_liquido_centavos);
+  const comVenda = meses.filter((m) => m.vendas > 0).length;
+  // média só dos meses que tiveram algum movimento (antes de usar o sistema não há dado, e zero não é resultado)
+  const comMovimento = meses.filter((m) => m.vendas > 0 || m.despesas_centavos > 0 || m.outras_receitas_centavos > 0 || m.perdas_centavos > 0 || m.taxas_centavos > 0);
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <Kpi rotulo="Receita líquida" valor={reais(receita)} dica={`${meses.length} meses · ${plural(comVenda, "mês com venda", "meses com venda")}`} />
+        <Kpi rotulo="Lucro bruto" valor={reaisComSinal(soma((m) => m.lucro_bruto_centavos))} />
+        <Kpi rotulo="Lucro líquido" valor={reaisComSinal(liquido)} tom={liquido < 0 ? "ruim" : "bom"} dica={receita > 0 ? `margem ${porcento(Math.round((liquido * 10_000) / receita))}` : "sem receita"} />
+        <Kpi
+          rotulo="Média por mês com movimento"
+          valor={comMovimento.length ? reaisComSinal(Math.round(comMovimento.reduce((t, m) => t + m.lucro_liquido_centavos, 0) / comMovimento.length)) : "—"}
+          dica={comMovimento.length ? `lucro líquido · ${plural(comMovimento.length, "mês", "meses")}` : "nenhum mês com movimento"}
+        />
+      </div>
+      <Cartao rotulo="Resultado de cada mês" titulo="Lucro líquido mês a mês">
+        <GraficoLucroMensal meses={meses} />
+      </Cartao>
+      <Cartao corpo={false} rotulo="Tabela" titulo="DRE mês a mês">
+        <div className="mt-3 overflow-x-auto">
+          <table className="tabela">
+            <thead>
+              <tr>
+                <th>Mês</th>
+                <th className="num">Vendas</th>
+                <th className="num">Receita líquida</th>
+                <th className="num">CMV</th>
+                <th className="num">Lucro bruto</th>
+                <th className="num">Taxas e perdas</th>
+                <th className="num">Outras receitas</th>
+                <th className="num">Despesas</th>
+                <th className="num">Lucro líquido</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...meses].reverse().map((m) =>
+                comMovimento.includes(m) ? (
+                  <tr key={m.mes}>
+                    <td className="font-semibold">{mesAno(m.mes)}</td>
+                    <td className="num">{m.vendas}</td>
+                    <td className="num">{reais(m.receita_centavos)}</td>
+                    <td className="num text-suave">{reais(m.cmv_centavos)}</td>
+                    <td className="num">{reaisComSinal(m.lucro_bruto_centavos)}</td>
+                    <td className="num text-suave">{reais(m.taxas_centavos + m.perdas_centavos)}</td>
+                    <td className="num text-suave">{reais(m.outras_receitas_centavos)}</td>
+                    <td className="num text-suave">{reais(m.despesas_centavos)}</td>
+                    <td className={cx("num font-bold", m.lucro_liquido_centavos < 0 && "text-perigo")}>
+                      {reaisComSinal(m.lucro_liquido_centavos)}
+                      {m.margem_liquida_bp !== null && <span className="block text-[11.5px] font-normal text-suave">margem {porcento(m.margem_liquida_bp)}</span>}
+                    </td>
+                  </tr>
+                ) : (
+                  <tr key={m.mes} className="text-suave">
+                    <td className="font-semibold">{mesAno(m.mes)}</td>
+                    <td colSpan={8} className="text-[12.5px]">
+                      — sem movimento registrado no sistema
+                    </td>
+                  </tr>
+                ),
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Cartao>
+      <p className="text-[12px] text-suave">
+        Lucro líquido = receita líquida − custo das mercadorias vendidas − taxas − perdas + outras receitas − despesas operacionais (por competência). Compras de mercadoria e de
+        material não entram aqui: o custo entra quando o produto é vendido. DRE gerencial, feita com os dados do sistema — não substitui a contabilidade.
+      </p>
     </div>
   );
 }
@@ -368,7 +589,7 @@ export function Dre({ r }: { r: Resultado }) {
     ...r.outras_receitas.por_categoria.map((c) => ({ rotulo: c.nome, valor: c.total_centavos, tipo: "sub" as const })),
     { rotulo: "(−) Despesas operacionais", valor: -r.despesas.total_centavos, tipo: "saida" },
     ...r.despesas.por_categoria.map((c) => ({ rotulo: c.nome, valor: -c.total_centavos, tipo: "sub" as const })),
-    { rotulo: "= Resultado do período", valor: r.lucro_liquido_centavos, tipo: "total", dica: r.margem_liquida_bp === null ? undefined : `margem ${porcento(r.margem_liquida_bp)}` },
+    { rotulo: "= Lucro líquido do período", valor: r.lucro_liquido_centavos, tipo: "total", dica: r.margem_liquida_bp === null ? undefined : `margem ${porcento(r.margem_liquida_bp)}` },
   ];
   const fora = [...r.fora_do_resultado.receitas.map((c) => ({ ...c, tipo: "receita" })), ...r.fora_do_resultado.despesas.map((c) => ({ ...c, tipo: "despesa" }))];
   return (
@@ -396,6 +617,15 @@ export function Dre({ r }: { r: Resultado }) {
         )}
       </Cartao>
       <div className="flex flex-col gap-4">
+        <div className={cx("rounded-[18px] border px-5 py-4", r.lucro_liquido_centavos < 0 ? "border-[#f3c2c2] bg-[#fff5f5]" : "border-[#bfe3cd] bg-[#f0faf4]")}>
+          <p className="rotulo">{r.lucro_liquido_centavos < 0 ? "Prejuízo do período" : "Lucro líquido do período"}</p>
+          <p className={cx("mt-1 text-[38px] leading-none font-black tracking-tight", r.lucro_liquido_centavos < 0 ? "text-perigo" : "text-[#0f6a41]")} data-testid="lucro-liquido">
+            {r.lucro_liquido_centavos < 0 ? `−${reais(-r.lucro_liquido_centavos)}` : reais(r.lucro_liquido_centavos)}
+          </p>
+          <p className="mt-1.5 text-[12.5px] text-[#4a4d52]">
+            {r.margem_liquida_bp === null ? "sem receita no período" : `margem líquida ${porcento(r.margem_liquida_bp)} sobre a receita de ${reais(r.vendas.receita_centavos)}`}
+          </p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Kpi rotulo="Vendas" valor={r.vendas.quantidade} dica={r.vendas.canceladas_quantidade ? `${plural(r.vendas.canceladas_quantidade, "cancelada")} fora da conta` : "concluídas"} />
           <Kpi rotulo="Ticket médio" valor={reais(r.vendas.ticket_medio_centavos)} />

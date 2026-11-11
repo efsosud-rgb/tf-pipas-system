@@ -31,6 +31,7 @@ export function Comprovante({ venda, config }: { venda: Venda; config: Config | 
         <span>Venda nº {venda.numero}</span>
         <span>{dataHora(venda.criado_em)}</span>
       </div>
+      {venda.usuario_nome && <div>Atendido por: {venda.usuario_nome}</div>}
       {venda.cliente && <div>Cliente: {venda.cliente}</div>}
       {venda.status === "cancelada" && <div style={{ fontWeight: 800, textAlign: "center", margin: "4px 0" }}>*** VENDA CANCELADA ***</div>}
       <div style={linha} />
@@ -43,6 +44,11 @@ export function Comprovante({ venda, config }: { venda: Venda; config: Config | 
             </span>
             <span>{reais(i.subtotal_centavos)}</span>
           </div>
+          {i.preco_base_centavos !== null && i.preco_base_centavos !== i.preco_unitario_centavos && (
+            <div style={{ fontSize: "0.92em" }}>
+              preço de atacado (normal {reais(i.preco_base_centavos)})
+            </div>
+          )}
         </div>
       ))}
       <div style={linha} />

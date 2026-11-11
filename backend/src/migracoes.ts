@@ -287,4 +287,97 @@ export const MIGRACOES: Array<(db: Database) => void> = [
       categoria.run({ nome, tipo: "receita", conta, sistema: null });
     }
   },
+
+  // 2 — usuários e permissões, preços por quantidade, produção e quem fez cada venda.
+  // Mantém todos os dados da versão 1.0.0.
+  (db) => {
+    db.exec(`
+      CREATE TABLE usuarios (
+        id INTEGER PRIMARY KEY,
+        nome TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        senha_hash TEXT NOT NULL,
+        perfil TEXT NOT NULL CHECK (perfil IN ('administrador', 'funcionario')),
+        permissoes TEXT NOT NULL DEFAULT '',
+        ativo INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0, 1)),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL,
+        ultimo_acesso_em TEXT
+      );
+
+      CREATE TABLE sessoes_usuario (
+        token_hash TEXT PRIMARY KEY,
+        usuario_id INTEGER NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+        criado_em TEXT NOT NULL,
+        expira_em TEXT NOT NULL,
+        usado_em TEXT NOT NULL
+      );
+      CREATE INDEX sessoes_usuario_usuario ON sessoes_usuario (usuario_id);
+
+      -- "A partir de X unidades, cada uma sai por Y."
+      CREATE TABLE precos_quantidade (
+        id INTEGER PRIMARY KEY,
+        produto_id INTEGER NOT NULL REFERENCES produtos (id) ON DELETE CASCADE,
+        quantidade_minima_mil INTEGER NOT NULL CHECK (quantidade_minima_mil > 1000),
+        preco_centavos INTEGER NOT NULL CHECK (preco_centavos > 0),
+        UNIQUE (produto_id, quantidade_minima_mil)
+      );
+
+      ALTER TABLE produtos ADD COLUMN fabricado INTEGER NOT NULL DEFAULT 0 CHECK (fabricado IN (0, 1));
+      ALTER TABLE produtos ADD COLUMN lote_producao_mil INTEGER NOT NULL DEFAULT 0 CHECK (lote_producao_mil >= 0);
+
+      -- preço normal do produto no momento da venda (o item pode ter saído pelo preço por quantidade)
+      ALTER TABLE venda_itens ADD COLUMN preco_base_centavos INTEGER;
+
+      ALTER TABLE vendas ADD COLUMN usuario_id INTEGER REFERENCES usuarios (id);
+      ALTER TABLE vendas ADD COLUMN usuario_nome TEXT NOT NULL DEFAULT '';
+      ALTER TABLE vendas ADD COLUMN cancelada_por TEXT NOT NULL DEFAULT '';
+      ALTER TABLE movimentos_caixa ADD COLUMN usuario_nome TEXT NOT NULL DEFAULT '';
+      ALTER TABLE entradas_estoque ADD COLUMN tipo TEXT NOT NULL DEFAULT 'compra' CHECK (tipo IN ('compra', 'producao'));
+      ALTER TABLE entradas_estoque ADD COLUMN usuario_nome TEXT NOT NULL DEFAULT '';
+
+      -- Novo tipo de movimento de estoque: 'producao'. O SQLite não altera CHECK,
+      -- então a tabela é recriada com os mesmos dados.
+      CREATE TABLE movimentos_estoque_novo (
+        id INTEGER PRIMARY KEY,
+        produto_id INTEGER NOT NULL REFERENCES produtos (id),
+        tipo TEXT NOT NULL CHECK (tipo IN
+          ('inicial', 'entrada', 'producao', 'venda', 'cancelamento', 'contagem', 'perda', 'brinde', 'uso')),
+        quantidade_mil INTEGER NOT NULL CHECK (quantidade_mil <> 0),
+        saldo_mil INTEGER NOT NULL,
+        custo_unitario_centavos INTEGER NOT NULL CHECK (custo_unitario_centavos >= 0),
+        venda_id INTEGER REFERENCES vendas (id),
+        entrada_id INTEGER REFERENCES entradas_estoque (id),
+        observacao TEXT NOT NULL DEFAULT '',
+        data TEXT NOT NULL,
+        criado_em TEXT NOT NULL
+      );
+      INSERT INTO movimentos_estoque_novo
+        (id, produto_id, tipo, quantidade_mil, saldo_mil, custo_unitario_centavos, venda_id, entrada_id, observacao, data, criado_em)
+        SELECT id, produto_id, tipo, quantidade_mil, saldo_mil, custo_unitario_centavos, venda_id, entrada_id, observacao, data, criado_em
+        FROM movimentos_estoque;
+      DROP TABLE movimentos_estoque;
+      ALTER TABLE movimentos_estoque_novo RENAME TO movimentos_estoque;
+      CREATE INDEX movimentos_estoque_produto ON movimentos_estoque (produto_id);
+      CREATE INDEX movimentos_estoque_data ON movimentos_estoque (data);
+    `);
+
+    // Material comprado para fabricar pipas vira custo da pipa (no cadastro do
+    // produto), então não conta no lucro na hora da compra — senão contaria duas vezes.
+    db.query(
+      `INSERT INTO categorias_financeiras (nome, tipo, conta_no_resultado, sistema)
+       VALUES ('Material para produção', 'despesa', 0, 'material_producao')
+       ON CONFLICT DO NOTHING`,
+    ).run();
+
+    // Parâmetros da sugestão de produção (a pessoa muda na tela Produção).
+    const config = db.query("INSERT INTO config (chave, valor) VALUES ($chave, $valor) ON CONFLICT (chave) DO NOTHING");
+    for (const [chave, valor] of Object.entries({
+      producao_dias_alvo: "30",
+      producao_dias_historico: "30",
+      alerta_dias_cobertura: "7",
+      comprovante_largura: "80",
+    })) {
+      config.run({ chave, valor });
+    }
+  },
 ];

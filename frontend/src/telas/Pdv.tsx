@@ -10,19 +10,21 @@ import {
   QrCode,
   ScanBarcode,
   Search,
+  Tag,
   Trash2,
   Wallet,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, mensagemDeErro } from "../api";
+import { usePode } from "../auth";
 import { avisar, confirmar } from "../componentes/avisos";
 import { imprimirComprovante } from "../componentes/comprovante";
 import { AvisoErro, Botao, Campo, CampoDinheiro, Carregando, cx, Entrada, Etiqueta, Modal, Vazio } from "../componentes/ui";
-import { normalizar, plural, porcento, quantidade, reais, textoParaBp, textoParaCentavos, textoParaQuantidade } from "../formato";
+import { normalizar, plural, porcento, quantidade, quantidadeParaCampo, reais, textoParaBp, textoParaCentavos, textoParaQuantidade } from "../formato";
 import { avisarMudanca, gravarLocal, lerLocal, useApi, useAtalhos } from "../hooks";
 import { irPara } from "../rotas";
-import type { Config, FormaPagamento, PainelInicio, Produto, ResumoCaixa, UnidadeInfo, Venda } from "../tipos";
+import type { AlertaEstoque, Config, FaixaPreco, FormaPagamento, PainelRapido, Produto, ResumoCaixa, UnidadeInfo, Venda } from "../tipos";
 
 interface ItemCarrinho {
   produto_id: number;
@@ -55,6 +57,26 @@ function valorItem(qtd: number, preco: number): number {
   return Math.floor((2 * mil * preco + 1000) / 2000);
 }
 
+/**
+ * Preço por quantidade, com a mesma regra do servidor: vale a faixa de maior
+ * quantidade que a venda alcançou; abaixo da primeira faixa, o preço normal.
+ * `proxima` é a faixa seguinte (para avisar "levando X, sai por Y").
+ */
+function precoDaLinha(base: number, faixas: FaixaPreco[], qtd: number): { preco: number; faixa: FaixaPreco | null; proxima: FaixaPreco | null } {
+  const mil = Math.round(qtd * 1000);
+  let faixa: FaixaPreco | null = null;
+  let proxima: FaixaPreco | null = null;
+  for (const f of faixas) {
+    const fm = Math.round(f.quantidade * 1000);
+    if (mil >= fm) {
+      if (!faixa || fm > Math.round(faixa.quantidade * 1000)) faixa = f;
+    } else if (!proxima || fm < Math.round(proxima.quantidade * 1000)) {
+      proxima = f;
+    }
+  }
+  return { preco: faixa ? faixa.preco_centavos : base, faixa, proxima };
+}
+
 function iconeForma(f: FormaPagamento) {
   const n = normalizar(f.nome);
   if (f.tipo === "dinheiro") return <Banknote className="size-4" />;
@@ -69,7 +91,9 @@ export default function Pdv() {
   const config = useApi<Config>("/api/config");
   const caixa = useApi<{ caixa: ResumoCaixa | null }>("/api/caixa/atual");
   const unidades = useApi<UnidadeInfo[]>("/api/unidades");
-  const painel = useApi<PainelInicio>("/api/inicio");
+  const painel = useApi<PainelRapido>("/api/painel-rapido");
+  const alertas = useApi<AlertaEstoque[]>("/api/estoque/alertas");
+  const podeDesconto = usePode("desconto");
 
   const [rascunho, setRascunho] = useState<Rascunho>(() => lerLocal(CHAVE_RASCUNHO, RASCUNHO_VAZIO));
   const [pagamentosBase, setPagamentos] = useState<LinhaPagamento[]>([]);
@@ -102,11 +126,20 @@ export default function Pdv() {
     });
   }, [produtos.dados, busca, categoria]);
 
+  const alertaPorId = useMemo(() => new Map((alertas.dados ?? []).map((a) => [a.produto_id, a])), [alertas.dados]);
+
   // ---- contas da venda -------------------------------------------------------
-  const subtotal = rascunho.itens.reduce((s, i) => s + valorItem(i.quantidade, i.preco_centavos), 0);
+  const linhas = rascunho.itens.map((i) => {
+    const p = porId.get(i.produto_id);
+    const base = p?.preco_centavos ?? i.preco_centavos;
+    const calculo = precoDaLinha(base, p?.precos_quantidade ?? [], i.quantidade);
+    return { ...i, base, ...calculo, valor: valorItem(i.quantidade, calculo.preco) };
+  });
+  const subtotal = linhas.reduce((s, l) => s + l.valor, 0);
+  const economiaAtacado = linhas.reduce((s, l) => s + (l.faixa ? valorItem(l.quantidade, l.base) - l.valor : 0), 0);
   const descontoBp = rascunho.descontoModo === "porcento" ? textoParaBp(rascunho.descontoTexto) : null;
   const desconto = (() => {
-    if (!rascunho.descontoTexto.trim()) return 0;
+    if (!podeDesconto || !rascunho.descontoTexto.trim()) return 0;
     if (rascunho.descontoModo === "porcento") return descontoBp === null ? NaN : Math.round((subtotal * descontoBp) / 10_000);
     const v = textoParaCentavos(rascunho.descontoTexto);
     return v === null ? NaN : v;
@@ -236,7 +269,7 @@ export default function Pdv() {
   useAtalhos(
     {
       F2: () => refBusca.current?.focus(),
-      F4: () => refDesconto.current?.focus(),
+      F4: () => podeDesconto && refDesconto.current?.focus(),
       F8: () => {
         const dinheiro = (formas.dados ?? []).find((f) => f.tipo === "dinheiro");
         if (dinheiro && rascunho.itens.length) escolherForma(dinheiro);
@@ -260,8 +293,7 @@ export default function Pdv() {
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Etiqueta tom="neutro">Hoje: {painel.dados ? `${plural(painel.dados.dia.vendas, "venda")} · ${reais(painel.dados.dia.receita_centavos)}` : "—"}</Etiqueta>
-          <Etiqueta tom="neutro">Sem NFC-e · comprovante não fiscal</Etiqueta>
+          <VendasDeHoje painel={painel.dados} erro={painel.erro} />
           <Botao variante="secundario" tamanho="sm" icone={<X className="size-4" />} onClick={() => void confirmarLimpeza()} atalho="Ctrl+Del">
             Limpar venda
           </Botao>
@@ -345,6 +377,9 @@ export default function Pdv() {
               <div className="grid grid-cols-[repeat(auto-fill,minmax(178px,1fr))] gap-2.5">
                 {filtrados.slice(0, 120).map((p, i) => {
                   const semEstoque = p.controla_estoque && p.estoque <= 0;
+                  const alerta = alertaPorId.get(p.id);
+                  const acabando = !semEstoque && p.controla_estoque && (p.situacao_estoque === "baixo" || !!alerta);
+                  const faixa0 = p.precos_quantidade[0];
                   return (
                     <button
                       key={p.id}
@@ -360,15 +395,29 @@ export default function Pdv() {
                     >
                       <span className="line-clamp-2 pr-6 text-[13.5px] leading-snug font-semibold text-tinta">{p.nome}</span>
                       <span className="mt-2 flex items-end justify-between gap-2">
-                        <span className="text-[16px] font-extrabold tracking-tight tabular-nums">{reais(p.preco_centavos)}</span>
+                        <span className="min-w-0">
+                          <span className="block text-[16px] font-extrabold tracking-tight tabular-nums">{reais(p.preco_centavos)}</span>
+                        </span>
                         {p.controla_estoque ? (
-                          <span className={cx("text-[11.5px] font-semibold tabular-nums", semEstoque ? "text-perigo" : p.situacao_estoque === "baixo" ? "text-alerta" : "text-suave")}>
-                            {semEstoque ? "sem estoque" : quantidade(p.estoque, p.unidade)}
+                          <span className="flex shrink-0 flex-col items-end gap-0.5" title={alerta?.texto}>
+                            {semEstoque ? (
+                              <span className="rounded-full bg-[#fde6e6] px-1.5 py-px text-[10.5px] font-bold tracking-wide text-[#a3191e] uppercase">Esgotado</span>
+                            ) : acabando ? (
+                              <span className="rounded-full bg-[#fdf1dc] px-1.5 py-px text-[10.5px] font-bold tracking-wide text-[#8a5300] uppercase">Acabando</span>
+                            ) : null}
+                            {!semEstoque && (
+                              <span className={cx("text-[11.5px] font-semibold tabular-nums", acabando ? "text-alerta" : "text-suave")}>{quantidade(p.estoque, p.unidade)}</span>
+                            )}
                           </span>
                         ) : (
                           <span className="text-[11px] text-suave">{p.unidade}</span>
                         )}
                       </span>
+                      {faixa0 && (
+                        <span className="mt-1 block truncate text-[11px] font-semibold text-[#1d5c9a] tabular-nums" title="Preço por quantidade">
+                          {quantidade(faixa0.quantidade)}+ por {reais(faixa0.preco_centavos)} cada
+                        </span>
+                      )}
                       <Plus className="absolute top-3 right-3 size-4 text-[#b5b6b1] transition-colors group-hover:text-tinta" />
                     </button>
                   );
@@ -394,19 +443,36 @@ export default function Pdv() {
               <p className="py-8 text-center text-[13px] text-suave">Escaneie ou clique nos produtos para adicionar.</p>
             ) : (
               <ul className="divide-y divide-[#efefeb]">
-                {rascunho.itens.map((i) => {
+                {linhas.map((i) => {
                   const p = porId.get(i.produto_id);
                   const frac = fracionavel.get(i.unidade) ?? false;
                   const passo = 1;
                   const alertaEstoque = p && p.controla_estoque && p.estoque < i.quantidade;
+                  const sugerir = i.proxima && i.proxima.preco_centavos < i.preco ? i.proxima : null;
                   return (
                     <li key={i.produto_id} className="flex items-center gap-3 py-2.5">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13.5px] font-semibold">{i.nome}</p>
                         <p className="text-[11.5px] text-suave tabular-nums">
-                          {reais(i.preco_centavos)} / {i.unidade}
+                          {i.faixa ? (
+                            <>
+                              <s className="mr-1 text-[#a2a39e]">{reais(i.base)}</s>
+                              <b className="text-sucesso">{reais(i.preco)}</b> / {i.unidade}
+                              <span className="ml-1.5 rounded bg-[#e3f4ea] px-1 text-[10.5px] font-bold text-[#12663f]">atacado {quantidade(i.faixa.quantidade)}+</span>
+                            </>
+                          ) : (
+                            <>
+                              {reais(i.preco)} / {i.unidade}
+                            </>
+                          )}
                           {alertaEstoque && <span className="ml-1.5 font-semibold text-alerta">· estoque {quantidade(Math.max(p!.estoque, 0))}</span>}
                         </p>
+                        {sugerir && (
+                          <p className="mt-0.5 flex items-center gap-1 text-[11.5px] font-semibold text-[#1d5c9a] tabular-nums">
+                            <Tag className="size-3" /> Com {quantidade(sugerir.quantidade)}: {reais(sugerir.preco_centavos)} cada (faltam{" "}
+                            {quantidade(Math.round((sugerir.quantidade - i.quantidade) * 1000) / 1000)})
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center rounded-xl border border-borda">
                         <button type="button" aria-label="Diminuir" className="grid size-7 place-items-center text-suave hover:text-tinta" onClick={() => mudarQuantidade(i.produto_id, Math.round((i.quantidade - passo) * 1000) / 1000)}>
@@ -417,7 +483,7 @@ export default function Pdv() {
                           <Plus className="size-3.5" />
                         </button>
                       </div>
-                      <p className="w-[78px] text-right text-[13.5px] font-bold tabular-nums">{reais(valorItem(i.quantidade, i.preco_centavos))}</p>
+                      <p className="w-[78px] text-right text-[13.5px] font-bold tabular-nums">{reais(i.valor)}</p>
                       <button type="button" aria-label={`Remover ${i.nome}`} onClick={() => remover(i.produto_id)} className="text-[#b5b6b1] hover:text-perigo">
                         <Trash2 className="size-4" />
                       </button>
@@ -431,9 +497,18 @@ export default function Pdv() {
           <div className="rolagem-fina max-h-[74%] shrink-0 space-y-3 overflow-y-auto px-5 pt-3 pb-4">
             <div className="rounded-2xl bg-[#f7f7f4] px-4 py-2.5 text-[13.5px]">
               <div className="flex justify-between py-0.5 text-[#55585e]">
-                <span>Subtotal</span>
+                <span>
+                  Subtotal
+                  {economiaAtacado > 0 && <span className="ml-1.5 text-[12px] font-semibold text-sucesso">(atacado: −{reais(economiaAtacado)})</span>}
+                </span>
                 <span className="tabular-nums">{reais(subtotal)}</span>
               </div>
+              {!podeDesconto ? (
+                <div className="flex justify-between py-0.5 text-[12px] text-suave">
+                  <span>Desconto</span>
+                  <span>seu usuário não lança desconto</span>
+                </div>
+              ) : (
               <div className="flex items-center justify-between gap-2 py-0.5 text-[#55585e]">
                 <label htmlFor="desconto" className="flex items-center gap-1.5">
                   Desconto <kbd className="rounded border border-borda bg-white px-1 font-mono text-[10px] text-suave">F4</kbd>
@@ -466,6 +541,7 @@ export default function Pdv() {
                   <span className="w-[86px] text-right tabular-nums">− {reais(Number.isNaN(desconto) ? 0 : desconto)}</span>
                 </div>
               </div>
+              )}
               {descontoInvalido && rascunho.descontoTexto && <p className="text-right text-[12px] font-medium text-perigo">O desconto precisa ser menor que o valor da venda.</p>}
               <div className="mt-1 flex items-baseline justify-between border-t border-[#e6e6e1] pt-2">
                 <span className="text-[15px] font-bold">
@@ -587,6 +663,39 @@ export default function Pdv() {
   );
 }
 
+/** Total vendido hoje (vendas concluídas), sempre à vista na frente de caixa. */
+function VendasDeHoje({ painel, erro }: { painel: PainelRapido | null; erro: string | null }) {
+  const p = painel;
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-borda/80 bg-white px-3.5 py-1.5 shadow-[0_1px_2px_rgba(0,0,0,.04)]" title="Vendas concluídas hoje (canceladas não entram)">
+      <div>
+        <p className="text-[10px] font-bold tracking-[.16em] text-suave uppercase">Vendas de hoje</p>
+        <p className="text-[18px] leading-tight font-extrabold tabular-nums" data-testid="vendas-hoje">
+          {erro ? "—" : p ? reais(p.vendas.total_centavos) : "…"}
+        </p>
+      </div>
+      <div className="h-8 w-px bg-borda" />
+      <div className="text-[12px] leading-snug text-[#4a4d52] tabular-nums">
+        <p>{p ? plural(p.vendas.quantidade, "venda") : "—"}</p>
+        <p className="text-suave">{p && p.vendas.ticket_medio_centavos !== null ? `ticket médio ${reais(p.vendas.ticket_medio_centavos)}` : "ticket médio —"}</p>
+      </div>
+      {p && p.por_forma.length > 0 && (
+        <>
+          <div className="hidden h-8 w-px bg-borda 2xl:block" />
+          <div className="hidden gap-3.5 text-[12px] leading-snug 2xl:flex">
+            {p.por_forma.map((f) => (
+              <p key={f.forma_id}>
+                <span className="block text-suave">{f.nome}</span>
+                <span className="font-semibold tabular-nums">{reais(f.valor_centavos)}</span>
+              </p>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function QuantidadeEditavel({ valor, fracionavel, aoMudar }: { valor: number; fracionavel: boolean; aoMudar: (q: number) => void }) {
   const [texto, setTexto] = useState<string | null>(null);
   const mostrado = texto ?? quantidade(valor);
@@ -601,7 +710,7 @@ function QuantidadeEditavel({ valor, fracionavel, aoMudar }: { valor: number; fr
     <input
       value={mostrado}
       onFocus={(e) => {
-        setTexto(quantidade(valor));
+        setTexto(quantidadeParaCampo(valor));
         requestAnimationFrame(() => e.target.select());
       }}
       onChange={(e) => setTexto(e.target.value)}
@@ -618,15 +727,13 @@ function QuantidadeEditavel({ valor, fracionavel, aoMudar }: { valor: number; fr
 
 function AbrirCaixaRapido() {
   const [fundo, setFundo] = useState<number | null>(null);
-  const [operador, setOperador] = useState(() => lerLocal("tfpipas.operador", ""));
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   async function abrir() {
     setEnviando(true);
     setErro(null);
     try {
-      await api.post("/api/caixa/abrir", { fundo_troco_centavos: fundo ?? 0, operador });
-      gravarLocal("tfpipas.operador", operador);
+      await api.post("/api/caixa/abrir", { fundo_troco_centavos: fundo ?? 0 });
       avisar("Caixa aberto. Boas vendas!");
       avisarMudanca();
     } catch (e) {
@@ -641,14 +748,9 @@ function AbrirCaixaRapido() {
         <AlertTriangle className="size-4" /> Abra o caixa para concluir vendas
       </p>
       <p className="mt-1 text-[12.5px] text-[#8a5a10]">Informe o dinheiro que já está na gaveta para troco (pode ser zero).</p>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <Campo rotulo="Fundo de troco">
-          <CampoDinheiro valor={fundo} aoMudar={setFundo} placeholder="0,00" />
-        </Campo>
-        <Campo rotulo="Operador (opcional)">
-          <Entrada value={operador} onChange={(e) => setOperador(e.target.value)} maxLength={60} placeholder="Nome" />
-        </Campo>
-      </div>
+      <Campo rotulo="Fundo de troco" className="mt-3">
+        <CampoDinheiro valor={fundo} aoMudar={setFundo} placeholder="0,00" />
+      </Campo>
       {erro && <p className="mt-2 text-[12.5px] font-medium text-perigo">{erro}</p>}
       <Botao className="mt-3 w-full" carregando={enviando} onClick={() => void abrir()}>
         Abrir caixa
@@ -705,6 +807,25 @@ function VendaConcluida({ venda, config, aoFechar }: { venda: Venda | null; conf
             <span className="tabular-nums">{reais(venda.total_centavos)}</span>
           </li>
         </ul>
+        {venda.alertas_estoque && venda.alertas_estoque.length > 0 && (
+          <div className="rounded-2xl border border-[#f1d9a8] bg-[#fff8ea] px-4 py-3" role="status">
+            <p className="flex items-center gap-2 text-[13px] font-bold text-[#7a4a00]">
+              <AlertTriangle className="size-4" /> Estoque acabando
+            </p>
+            <ul className="mt-1.5 space-y-0.5 text-[12.5px] text-[#7a4a00]">
+              {venda.alertas_estoque.map((a) => (
+                <li key={a.produto_id}>
+                  <b>{a.nome}</b>:{" "}
+                  {a.situacao === "zerado"
+                    ? "esgotou"
+                    : a.situacao === "negativo"
+                      ? `ficou negativo (${quantidade(a.estoque, a.unidade)})`
+                      : `ficou com ${quantidade(a.estoque, a.unidade)} (mínimo ${quantidade(a.estoque_minimo)})`}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </Modal>
   );

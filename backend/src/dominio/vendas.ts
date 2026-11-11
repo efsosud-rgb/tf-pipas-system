@@ -7,7 +7,8 @@ import { agoraIso, dataLocal } from "../relogio";
 import { exigirCaixaAberto, lancarNaGaveta, sessaoAberta } from "./caixa";
 import { lerConfig } from "./config";
 import { movimentarEstoque } from "./movimento-estoque";
-import { exigirProduto, type LinhaProduto } from "./produtos";
+import { faixasDoProduto, precoParaQuantidade } from "./precos";
+import { exigirProduto, situacaoEstoque, type LinhaProduto } from "./produtos";
 
 /**
  * Venda de balcão.
@@ -18,7 +19,15 @@ import { exigirProduto, type LinhaProduto } from "./produtos";
  *   um, sem sobrar nem faltar centavo, para o lucro por produto somar certo.
  * - Pode pagar com várias formas ao mesmo tempo. Troco só sai do dinheiro.
  * - A taxa da maquininha é calculada sobre o valor de cada forma e congelada.
+ * - Preço por quantidade: o item sai pelo preço da maior faixa alcançada
+ *   (a quantidade do mesmo produto é somada antes de escolher a faixa).
  */
+
+/** Quem fez a operação (usuário logado). */
+export interface Autor {
+  id: number;
+  nome: string;
+}
 
 export interface NovaVenda {
   itens: Array<{ produto_id: number; quantidade_mil: number }>;
@@ -35,6 +44,8 @@ export interface ItemVenda {
   unidade: string;
   quantidade: number;
   preco_unitario_centavos: number;
+  /** Preço normal do produto na hora da venda; null em vendas antigas (antes do preço por quantidade). */
+  preco_base_centavos: number | null;
   custo_unitario_centavos: number;
   subtotal_centavos: number;
   desconto_centavos: number;
@@ -73,6 +84,10 @@ export interface Venda {
   cancelada_em: string | null;
   motivo_cancelamento: string;
   sessao_cancelamento_id: number | null;
+  /** Quem vendeu (vazio em vendas de antes do cadastro de usuários). */
+  usuario_nome: string;
+  usuario_id: number | null;
+  cancelada_por: string;
   itens: ItemVenda[];
   pagamentos: PagamentoVenda[];
 }
@@ -92,7 +107,7 @@ export function obterVenda(db: Banco, id: number): Venda {
   if (!v) throw naoEncontrado("Venda não encontrada.");
   const itens = db
     .query(
-      `SELECT produto_id, nome, unidade, quantidade_mil, preco_unitario_centavos, custo_unitario_centavos,
+      `SELECT produto_id, nome, unidade, quantidade_mil, preco_unitario_centavos, preco_base_centavos, custo_unitario_centavos,
               subtotal_centavos, desconto_centavos, total_centavos, custo_total_centavos
        FROM venda_itens WHERE venda_id = $id ORDER BY id`,
     )
@@ -112,7 +127,7 @@ export function obterVenda(db: Banco, id: number): Venda {
   };
 }
 
-export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
+export function registrarVenda(db: Banco, dados: NovaVenda, autor?: Autor): Venda {
   return transacao(db, () => {
     const sessao = exigirCaixaAberto(db, "vender");
     if (dados.itens.length === 0) throw new ErroNegocio("Adicione pelo menos um produto à venda.", 422, "itens");
@@ -127,7 +142,7 @@ export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
     }
 
     const config = lerConfig(db);
-    const linhas: Array<{ p: LinhaProduto; quantidadeMil: number; subtotal: number; custoTotal: number }> = [];
+    const linhas: Array<{ p: LinhaProduto; quantidadeMil: number; preco: number; subtotal: number; custoTotal: number }> = [];
     for (const [produtoId, quantidadeMil] of quantidades) {
       const p = exigirProduto(db, produtoId);
       if (!p.ativo) throw new ErroNegocio(`O produto "${p.nome}" está desativado.`, 422, "itens");
@@ -139,11 +154,12 @@ export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
           "itens",
         );
       }
-      const subtotal = valorDaQuantidade(quantidadeMil, p.preco_centavos);
+      const { preco_centavos: preco } = precoParaQuantidade(p.preco_centavos, faixasDoProduto(db, p.id), quantidadeMil);
+      const subtotal = valorDaQuantidade(quantidadeMil, preco);
       if (subtotal <= 0) {
         throw new ErroNegocio(`A quantidade de "${p.nome}" é pequena demais para ter valor.`, 422, "itens");
       }
-      linhas.push({ p, quantidadeMil, subtotal, custoTotal: valorDaQuantidade(quantidadeMil, p.custo_centavos) });
+      linhas.push({ p, quantidadeMil, preco, subtotal, custoTotal: valorDaQuantidade(quantidadeMil, p.custo_centavos) });
     }
 
     const subtotal = linhas.reduce((s, l) => s + l.subtotal, 0);
@@ -201,8 +217,8 @@ export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
       .query(
         `INSERT INTO vendas
            (sessao_id, data, criado_em, subtotal_centavos, desconto_centavos, total_centavos, custo_centavos,
-            taxas_centavos, troco_centavos, cliente, observacao)
-         VALUES ($sessao, $data, $agora, $subtotal, $desconto, $total, $custo, $taxas, $troco, $cliente, $obs)
+            taxas_centavos, troco_centavos, cliente, observacao, usuario_id, usuario_nome)
+         VALUES ($sessao, $data, $agora, $subtotal, $desconto, $total, $custo, $taxas, $troco, $cliente, $obs, $usuario, $usuarioNome)
          RETURNING id`,
       )
       .get({
@@ -217,13 +233,15 @@ export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
         troco,
         cliente: dados.cliente.trim(),
         obs: dados.observacao.trim(),
+        usuario: autor?.id ?? null,
+        usuarioNome: autor?.nome ?? "",
       }) as { id: number };
 
     const inserirItem = db.query(
       `INSERT INTO venda_itens
-         (venda_id, produto_id, nome, unidade, quantidade_mil, preco_unitario_centavos, custo_unitario_centavos,
+         (venda_id, produto_id, nome, unidade, quantidade_mil, preco_unitario_centavos, preco_base_centavos, custo_unitario_centavos,
           subtotal_centavos, desconto_centavos, total_centavos, custo_total_centavos)
-       VALUES ($venda, $produto, $nome, $unidade, $q, $preco, $custo, $subtotal, $desconto, $total, $custoTotal)`,
+       VALUES ($venda, $produto, $nome, $unidade, $q, $preco, $base, $custo, $subtotal, $desconto, $total, $custoTotal)`,
     );
     linhas.forEach((l, i) => {
       inserirItem.run({
@@ -232,7 +250,8 @@ export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
         nome: l.p.nome,
         unidade: l.p.unidade,
         q: l.quantidadeMil,
-        preco: l.p.preco_centavos,
+        preco: l.preco,
+        base: l.p.preco_centavos,
         custo: l.p.custo_centavos,
         subtotal: l.subtotal,
         desconto: descontos[i]!,
@@ -275,11 +294,42 @@ export function registrarVenda(db: Banco, dados: NovaVenda): Venda {
           valorCentavos: f.valor,
           descricao: `Venda nº ${id}`,
           vendaId: id,
+          usuarioNome: autor?.nome,
         });
       }
     }
     return obterVenda(db, id);
   });
+}
+
+export interface AlertaEstoqueVenda {
+  produto_id: number;
+  nome: string;
+  unidade: string;
+  estoque: number;
+  estoque_minimo: number;
+  situacao: "baixo" | "zerado" | "negativo";
+}
+
+/** Produtos desta venda que ficaram zerados ou no estoque mínimo (para avisar no caixa). */
+export function alertasDaVenda(db: Banco, venda: Venda): AlertaEstoqueVenda[] {
+  const alertas: AlertaEstoqueVenda[] = [];
+  for (const item of venda.itens) {
+    const p = db.query("SELECT * FROM produtos WHERE id = $id").get({ id: item.produto_id }) as LinhaProduto | null;
+    if (!p || !p.controla_estoque) continue;
+    const situacao = situacaoEstoque(p);
+    if (situacao === "baixo" || situacao === "zerado" || situacao === "negativo") {
+      alertas.push({
+        produto_id: p.id,
+        nome: p.nome,
+        unidade: p.unidade,
+        estoque: deMil(p.estoque_mil),
+        estoque_minimo: deMil(p.estoque_minimo_mil),
+        situacao,
+      });
+    }
+  }
+  return alertas;
 }
 
 export interface VendaNaLista {
@@ -297,6 +347,7 @@ export interface VendaNaLista {
   itens_quantidade: number;
   formas: string;
   sessao_id: number;
+  usuario_nome: string;
 }
 
 export function listarVendas(
@@ -325,7 +376,7 @@ export function listarVendas(
   const linhas = db
     .query(
       `SELECT v.id, v.data, v.criado_em, v.total_centavos, v.desconto_centavos, v.custo_centavos, v.taxas_centavos,
-              v.status, v.cliente, v.sessao_id,
+              v.status, v.cliente, v.sessao_id, v.usuario_nome,
               (SELECT COUNT(*) FROM venda_itens i WHERE i.venda_id = v.id) AS itens_quantidade,
               (SELECT GROUP_CONCAT(forma_nome, ' + ') FROM venda_pagamentos pg WHERE pg.venda_id = v.id) AS formas
        FROM vendas v ${where} ORDER BY v.id DESC LIMIT $limite`,
@@ -344,7 +395,7 @@ export function listarVendas(
  * da gaveta do caixa aberto o valor devolvido ao cliente. PIX e cartão são
  * devolvidos fora do sistema (na maquininha ou no banco).
  */
-export function cancelarVenda(db: Banco, id: number, motivo: string): Venda {
+export function cancelarVenda(db: Banco, id: number, motivo: string, autor?: Autor): Venda {
   return transacao(db, () => {
     const venda = obterVenda(db, id);
     if (venda.status === "cancelada") throw new ErroNegocio("Essa venda já foi cancelada.", 409);
@@ -361,6 +412,7 @@ export function cancelarVenda(db: Banco, id: number, motivo: string): Venda {
         valorCentavos: -dinheiro,
         descricao: `Cancelamento da venda nº ${id}`,
         vendaId: id,
+        usuarioNome: autor?.nome,
       });
       sessaoCancelamento = sessao.id;
     }
@@ -383,9 +435,9 @@ export function cancelarVenda(db: Banco, id: number, motivo: string): Venda {
 
     db.query(
       `UPDATE vendas SET status = 'cancelada', cancelada_em = $agora, motivo_cancelamento = $motivo,
-         sessao_cancelamento_id = $sessao
+         sessao_cancelamento_id = $sessao, cancelada_por = $por
        WHERE id = $id`,
-    ).run({ id, agora: agoraIso(), motivo: texto, sessao: sessaoCancelamento });
+    ).run({ id, agora: agoraIso(), motivo: texto, sessao: sessaoCancelamento, por: autor?.nome ?? "" });
     return obterVenda(db, id);
   });
 }

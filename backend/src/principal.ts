@@ -71,7 +71,17 @@ async function iniciar(): Promise<void> {
   }
 
   log(`Iniciando TF Pipas ${pacote.version} — dados em ${pastaDados}`);
-  const db = abrirBanco(caminhoBanco);
+  const db = abrirBanco(caminhoBanco, {
+    // atualização do programa (ex.: 1.0 → 1.1): guarda o banco como estava antes de mudar a estrutura
+    antesDeMigrar: (banco, de, para) => {
+      try {
+        const feito = fazerBackup(banco, pastaBackups, "antes-de-atualizar");
+        log(`Atualizando a estrutura do banco de ${de} para ${para}. Cópia de antes: ${feito.nome}`);
+      } catch (erro) {
+        log(`Backup antes de atualizar a estrutura falhou: ${String(erro)}`);
+      }
+    },
+  });
   try {
     const feito = backupAutomaticoDoDia(db, pastaBackups);
     if (feito) log(`Backup automático do dia: ${feito.nome}`);

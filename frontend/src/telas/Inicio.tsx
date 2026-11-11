@@ -1,14 +1,18 @@
-import { AlertTriangle, ArrowRight, Boxes, CalendarClock, CheckCircle2, Circle, PackagePlus, Receipt, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, ArrowRight, Boxes, CalendarClock, CheckCircle2, Circle, Factory, PackagePlus, Receipt, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
+import { usePode } from "../auth";
 import { AvisoErro, Botao, Cabecalho, Carregando, Cartao, cx, Etiqueta, Kpi, Vazio } from "../componentes/ui";
 import { data, dataHora, hora, plural, porcento, quantidade, reais, relativoAoDia, saudacao } from "../formato";
 import { useApi } from "../hooks";
 import { irPara } from "../rotas";
-import type { Config, FormaPagamento, PainelInicio } from "../tipos";
+import type { AlertaEstoque, Config, FormaPagamento, PainelInicio, SugestaoProducao } from "../tipos";
 
 export default function Inicio() {
   const painel = useApi<PainelInicio>("/api/inicio");
   const config = useApi<Config>("/api/config");
   const formas = useApi<FormaPagamento[]>("/api/formas-pagamento");
+  const alertas = useApi<AlertaEstoque[]>("/api/estoque/alertas");
+  const veProducao = usePode("produtos");
+  const producao = useApi<SugestaoProducao>(veProducao ? "/api/producao/sugestao" : null);
   const p = painel.dados;
 
   if (painel.erro && !p) return <AvisoErro mensagem={painel.erro} aoTentar={painel.recarregar} />;
@@ -101,8 +105,8 @@ export default function Inicio() {
           <Kpi rotulo="Lucro bruto do mês" valor={reais(p.mes.lucro_bruto_centavos)} dica="faturamento − custo das mercadorias" />
           <Kpi rotulo="Despesas do mês" valor={reais(p.mes.despesas_centavos)} dica="lançadas no financeiro" />
           <Kpi
-            rotulo="Resultado do mês"
-            valor={reais(p.mes.lucro_liquido_centavos)}
+            rotulo="Lucro líquido do mês"
+            valor={p.mes.lucro_liquido_centavos < 0 ? `−${reais(-p.mes.lucro_liquido_centavos)}` : reais(p.mes.lucro_liquido_centavos)}
             dica={p.mes.margem_liquida_bp === null ? "sem receita no mês" : `margem líquida de ${porcento(p.mes.margem_liquida_bp)}`}
             tom={p.mes.lucro_liquido_centavos < 0 ? "ruim" : p.mes.lucro_liquido_centavos > 0 ? "bom" : "neutro"}
           />
@@ -182,26 +186,60 @@ export default function Inicio() {
 
         <Cartao
           rotulo="Estoque"
-          titulo={p.estoque.atencao_quantidade ? `${plural(p.estoque.atencao_quantidade, "produto pede", "produtos pedem")} atenção` : "Estoque em dia"}
-          acoes={<Boxes className="size-5 text-suave" />}
+          titulo={alertas.dados?.length ? `${plural(alertas.dados.length, "produto acabando", "produtos acabando")}` : "Estoque em dia"}
+          acoes={
+            alertas.dados?.length ? (
+              <Botao variante="fantasma" tamanho="sm" onClick={() => irPara("produtos", "filtro=acabando")}>
+                Ver <ArrowRight className="size-3.5" />
+              </Botao>
+            ) : (
+              <Boxes className="size-5 text-suave" />
+            )
+          }
         >
-          {p.estoque.atencao.length === 0 ? (
+          {alertas.erro ? (
+            <AvisoErro mensagem={alertas.erro} aoTentar={alertas.recarregar} />
+          ) : !alertas.dados ? (
+            <Carregando />
+          ) : alertas.dados.length === 0 ? (
             <Vazio
               icone={<PackagePlus className="size-5" />}
-              titulo={p.produtos_ativos ? "Nenhum produto zerado ou abaixo do mínimo" : "Sem produtos cadastrados"}
-              texto={p.produtos_ativos ? "Defina o estoque mínimo nos produtos para receber o aviso." : "Cadastre os produtos para controlar o estoque."}
+              titulo={p.produtos_ativos ? "Nada acabando" : "Sem produtos cadastrados"}
+              texto={
+                p.produtos_ativos
+                  ? "Nenhum produto zerado, no mínimo ou durando pouco no ritmo de venda. Defina o estoque mínimo nos produtos para o aviso ficar mais preciso."
+                  : "Cadastre os produtos para controlar o estoque."
+              }
             />
           ) : (
             <ul className="divide-y divide-[#efefeb]">
-              {p.estoque.atencao.map((prod) => (
-                <li key={prod.id} className="flex items-center justify-between gap-3 py-2">
-                  <p className="truncate text-[13.5px] font-semibold">{prod.nome}</p>
-                  <Etiqueta tom={prod.situacao_estoque === "baixo" ? "alerta" : "perigo"}>
-                    {prod.situacao_estoque === "baixo" ? `${quantidade(prod.estoque, prod.unidade)} (mín. ${quantidade(prod.estoque_minimo)})` : quantidade(prod.estoque, prod.unidade)}
+              {alertas.dados.slice(0, 6).map((a) => (
+                <li key={a.produto_id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-[13.5px] font-semibold">{a.nome}</p>
+                    <p className="truncate text-[12px] text-suave">{a.texto}</p>
+                  </div>
+                  <Etiqueta tom={a.motivo === "zerado" || a.motivo === "negativo" ? "perigo" : "alerta"}>
+                    {a.motivo === "zerado" ? "Esgotado" : a.motivo === "negativo" ? "Negativo" : a.motivo === "abaixo_minimo" ? "No mínimo" : "Dura pouco"}
                   </Etiqueta>
                 </li>
               ))}
             </ul>
+          )}
+          {alertas.dados && alertas.dados.length > 6 && <p className="mt-2 text-[12px] text-suave">e mais {alertas.dados.length - 6}…</p>}
+          {producao.dados && (producao.dados.resumo.produzir_itens > 0 || producao.dados.resumo.comprar_itens > 0) && (
+            <button
+              type="button"
+              onClick={() => irPara("producao")}
+              className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-borda px-3.5 py-2.5 text-left hover:border-[#bdbdb7] hover:bg-[#fafaf8]"
+            >
+              <Factory className="size-5 shrink-0 text-suave" />
+              <span className="min-w-0 flex-1 text-[13px]">
+                <b>Sugestão de produção:</b> {plural(producao.dados.resumo.produzir_itens, "produto para produzir", "produtos para produzir")} ·{" "}
+                {plural(producao.dados.resumo.comprar_itens, "para comprar", "para comprar")}
+              </span>
+              <ArrowRight className="size-4 shrink-0 text-suave" />
+            </button>
           )}
         </Cartao>
       </div>

@@ -1,7 +1,7 @@
 {
   "name": "tf-pipas-interface",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Interface do TF Pipas (frente de caixa, produtos, caixa, vendas, financeiro e relatórios). Roda dentro do programa da loja, sem internet.",
   "type": "module",
   "scripts": {

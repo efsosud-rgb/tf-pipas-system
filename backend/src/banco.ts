@@ -3,11 +3,19 @@ import { MIGRACOES } from "./migracoes";
 
 export type Banco = Database;
 
+export interface OpcoesBanco {
+  /**
+   * Chamado antes de atualizar um banco que já existia (de uma versão anterior
+   * do programa) — o momento de guardar uma cópia. Não é chamado para banco novo.
+   */
+  antesDeMigrar?: (db: Banco, versaoAtual: number, versaoNova: number) => void;
+}
+
 /**
  * Abre (ou cria) o banco SQLite e aplica as migrações pendentes.
  * Use ":memory:" nos testes.
  */
-export function abrirBanco(caminho: string): Banco {
+export function abrirBanco(caminho: string, opcoes: OpcoesBanco = {}): Banco {
   const db = new Database(caminho, { create: true, strict: true });
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA busy_timeout = 5000;");
@@ -16,6 +24,8 @@ export function abrirBanco(caminho: string): Banco {
     // FULL: uma venda confirmada não se perde nem se faltar luz logo depois.
     db.exec("PRAGMA synchronous = FULL;");
   }
+  const atual = versaoDoBanco(db);
+  if (atual > 0 && atual < MIGRACOES.length) opcoes.antesDeMigrar?.(db, atual, MIGRACOES.length);
   migrar(db);
   return db;
 }

@@ -1,4 +1,4 @@
-TF PIPAS · GESTÃO DA LOJA
+TF PIPAS · GESTÃO DA LOJA  (versão 1.1)
 =========================
 
 Como abrir
@@ -11,13 +11,50 @@ Fechar a janela não desliga o programa: ele continua rodando escondido, pronto
 para abrir rápido. Para desligar de verdade: Configurações > Sistema >
 "Desligar o TF Pipas".
 
-Primeiro uso
-------------
+Primeiro acesso (novo na versão 1.1)
+------------------------------------
+Na primeira vez, o sistema pede para criar o ADMINISTRADOR (nome e senha de
+pelo menos 4 caracteres). Logo depois aparece um CÓDIGO DE RECUPERAÇÃO com
+16 letras e números: anote ou imprima e guarde longe do caixa. Só ele permite
+criar uma senha nova se o administrador esquecer a dele (tela de entrada >
+"Esqueci a senha"). Se perder o código, gere outro em Configurações > Usuários.
+
+Quem atualizou da versão 1.0: os produtos, vendas e o financeiro continuam
+todos aqui; só é preciso criar o administrador no primeiro acesso.
+
+Usuários
+--------
+Configurações > Usuários: cadastre cada funcionário com nome e senha.
+- Administrador: faz tudo, inclusive usuários, configurações e backups.
+- Funcionário: vende e cuida do caixa. Você libera, por pessoa: dar desconto,
+  cancelar venda, produtos/estoque/produção e financeiro/relatórios.
+Cada venda, abertura e fechamento de caixa fica no nome de quem estava logado.
+A sessão termina depois de 14 horas sem uso.
+
+Primeiro uso da loja
+--------------------
 1. Configurações > Loja e comprovante: nome, CNPJ, endereço e telefone que saem
    no comprovante; largura do papel da impressora (80 mm ou 58 mm).
 2. Configurações > Formas de pagamento: a taxa (%) de cada maquininha e do PIX.
-3. Produtos: cadastre os produtos (ou importe uma planilha CSV).
-4. Frente de caixa: abra o caixa com o fundo de troco e comece a vender.
+3. Produtos: cadastre os produtos (ou importe uma planilha CSV). No cadastro:
+   - "Preço por quantidade (atacado)": ex.: a partir de 10 unidades, R$ 12,00
+     cada. A frente de caixa aplica sozinha.
+   - "A loja fabrica este produto": entra na sugestão de produção.
+   - "Estoque mínimo": avisa "acabando" quando chegar nele.
+4. Configurações > Usuários: cadastre os funcionários.
+5. Frente de caixa: abra o caixa com o fundo de troco e comece a vender.
+
+Onde ver cada coisa
+-------------------
+- Vendas de hoje: no topo da frente de caixa e no menu lateral.
+- Estoque acabando: selo "Acabando"/"Esgotado" nos produtos, filtro
+  "Acabando" em Produtos e aviso depois de cada venda.
+- Produção: o que produzir e o que comprar, pelo ritmo de venda real dos
+  últimos dias. Registrar produção soma no estoque e atualiza o custo.
+- Financeiro: contas a pagar e a receber, lançamento de despesas, fluxo de
+  caixa dia a dia (com o previsto), DRE com o lucro líquido e o mês a mês.
+- Relatórios: produtos que mais saem e mais dão lucro, curva ABC, por
+  categoria, por forma de pagamento e por vendedor.
 
 Atalhos da frente de caixa
 --------------------------
@@ -31,6 +68,7 @@ Ficam nesta pasta, em "dados" (banco tfpipas.db e a pasta "backups").
 Um backup é feito sozinho todo dia, no fechamento do caixa e ao desligar.
 COPIE UM BACKUP PARA UM PENDRIVE OU PARA A NUVEM TODA SEMANA
 (Configurações > Cópias de segurança > Baixar).
+Restaurar um backup faz todo mundo entrar de novo com o próprio usuário.
 Desinstalar o programa NÃO apaga a pasta "dados".
 
 O que ainda não faz

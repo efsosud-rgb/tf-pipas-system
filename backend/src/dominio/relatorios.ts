@@ -1,7 +1,8 @@
 import type { Banco } from "../banco";
 import { margemBp, valorDaQuantidade } from "../dinheiro";
 import { deMil } from "../quantidade";
-import { dataLocal, diferencaEmDias, primeiroDiaDoMes, somarDias, somarMeses } from "../relogio";
+import { ErroNegocio } from "../erros";
+import { dataLocal, diferencaEmDias, primeiroDiaDoMes, somarDias, somarMeses, ultimoDiaDoMes } from "../relogio";
 import { resumoDoCaixa, saldoDaGaveta, sessaoAberta } from "./caixa";
 import { contasPendentes } from "./financeiro";
 import { listarProdutos, paraProduto, type LinhaProduto } from "./produtos";
@@ -276,7 +277,7 @@ export function relatorioEstoque(db: Banco) {
       valorVenda += valorDaQuantidade(l.estoque_mil, l.preco_centavos);
     }
   }
-  const produtos = linhas.map(paraProduto);
+  const produtos = linhas.map((l) => paraProduto(l));
   const atencao = produtos
     .filter((p) => p.situacao_estoque !== "ok")
     .sort((a, b) => {
@@ -357,5 +358,153 @@ export function painelInicio(db: Banco) {
     produtos_ativos: totalProdutos,
     mais_vendidos_mes: porProduto(db, inicioMes, hoje).produtos.slice(0, 5),
     produtos_sem_custo: listarProdutos(db).filter((p) => p.custo_centavos === 0).length,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Resumo rápido (barra lateral, capa e frente de caixa)                */
+/* ------------------------------------------------------------------ */
+
+export interface PainelRapido {
+  hoje: string;
+  vendas: {
+    quantidade: number;
+    total_centavos: number;
+    ticket_medio_centavos: number | null;
+    canceladas_quantidade: number;
+    canceladas_total_centavos: number;
+  };
+  por_forma: Array<{ forma_id: number; nome: string; tipo: string; vendas: number; valor_centavos: number }>;
+  caixa: { sessao_id: number; aberto_em: string; operador: string; dinheiro_na_gaveta_centavos: number } | null;
+  produtos_ativos: number;
+  alertas_estoque: number;
+  sugestoes_producao: number;
+}
+
+/** Só o que o caixa precisa ver: vendas do dia (sem custo nem lucro), caixa e avisos de estoque. */
+export function painelRapido(db: Banco, alertas: number, sugestoes: number): PainelRapido {
+  const hoje = dataLocal();
+  const v = db
+    .query(
+      `SELECT COUNT(*) AS quantidade, COALESCE(SUM(total_centavos), 0) AS total
+       FROM vendas WHERE status = 'concluida' AND data = $hoje`,
+    )
+    .get({ hoje }) as { quantidade: number; total: number };
+  const c = db
+    .query("SELECT COUNT(*) AS quantidade, COALESCE(SUM(total_centavos), 0) AS total FROM vendas WHERE status = 'cancelada' AND data = $hoje")
+    .get({ hoje }) as { quantidade: number; total: number };
+  const formas = porFormaPagamento(db, hoje, hoje).formas.map((f) => ({
+    forma_id: f.forma_id,
+    nome: f.nome,
+    tipo: f.tipo,
+    vendas: f.vendas,
+    valor_centavos: f.valor_centavos,
+  }));
+  const sessao = sessaoAberta(db);
+  const produtosAtivos = (db.query("SELECT COUNT(*) AS n FROM produtos WHERE ativo = 1").get() as { n: number }).n;
+  return {
+    hoje,
+    vendas: {
+      quantidade: v.quantidade,
+      total_centavos: v.total,
+      ticket_medio_centavos: v.quantidade > 0 ? Math.round(v.total / v.quantidade) : null,
+      canceladas_quantidade: c.quantidade,
+      canceladas_total_centavos: c.total,
+    },
+    por_forma: formas,
+    caixa: sessao
+      ? {
+          sessao_id: sessao.id,
+          aberto_em: sessao.aberto_em,
+          operador: sessao.operador_abertura,
+          dinheiro_na_gaveta_centavos: saldoDaGaveta(db, sessao.id),
+        }
+      : null,
+    produtos_ativos: produtosAtivos,
+    alertas_estoque: alertas,
+    sugestoes_producao: sugestoes,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* DRE mês a mês                                                        */
+/* ------------------------------------------------------------------ */
+
+export interface ResultadoDoMes {
+  mes: string;
+  de: string;
+  ate: string;
+  vendas: number;
+  bruto_centavos: number;
+  descontos_centavos: number;
+  receita_centavos: number;
+  cmv_centavos: number;
+  lucro_bruto_centavos: number;
+  margem_bruta_bp: number | null;
+  taxas_centavos: number;
+  perdas_centavos: number;
+  outras_receitas_centavos: number;
+  despesas_centavos: number;
+  despesas_por_categoria: Array<{ categoria_id: number; nome: string; total_centavos: number }>;
+  lucro_liquido_centavos: number;
+  margem_liquida_bp: number | null;
+}
+
+/** Uma DRE por mês do período (até 24 meses). O primeiro e o último mês respeitam as datas pedidas. */
+export function resultadoMensal(db: Banco, de: string, ate: string): ResultadoDoMes[] {
+  const meses: ResultadoDoMes[] = [];
+  for (let inicio = primeiroDiaDoMes(de); inicio <= ate; inicio = somarMeses(inicio, 1)) {
+    if (meses.length >= 24) throw new ErroNegocio("Escolha um período de até 24 meses para ver mês a mês.", 400);
+    const fimDoMes = ultimoDiaDoMes(inicio);
+    const a = inicio < de ? de : inicio;
+    const b = fimDoMes > ate ? ate : fimDoMes;
+    const r = resultado(db, a, b);
+    meses.push({
+      mes: inicio.slice(0, 7),
+      de: a,
+      ate: b,
+      vendas: r.vendas.quantidade,
+      bruto_centavos: r.vendas.bruto_centavos,
+      descontos_centavos: r.vendas.descontos_centavos,
+      receita_centavos: r.vendas.receita_centavos,
+      cmv_centavos: r.cmv_centavos,
+      lucro_bruto_centavos: r.lucro_bruto_centavos,
+      margem_bruta_bp: r.margem_bruta_bp,
+      taxas_centavos: r.taxas_centavos,
+      perdas_centavos: r.perdas.total_centavos,
+      outras_receitas_centavos: r.outras_receitas.total_centavos,
+      despesas_centavos: r.despesas.total_centavos,
+      despesas_por_categoria: r.despesas.por_categoria.map((c) => ({ categoria_id: c.categoria_id, nome: c.nome, total_centavos: c.total_centavos })),
+      lucro_liquido_centavos: r.lucro_liquido_centavos,
+      margem_liquida_bp: r.margem_liquida_bp,
+    });
+  }
+  return meses;
+}
+
+/* ------------------------------------------------------------------ */
+/* Vendas por vendedor                                                  */
+/* ------------------------------------------------------------------ */
+
+export function porVendedor(db: Banco, de: string, ate: string) {
+  const linhas = db
+    .query(
+      `SELECT usuario_nome AS nome, COUNT(*) AS vendas, SUM(total_centavos) AS total_centavos,
+              SUM(total_centavos - custo_centavos) AS lucro_bruto_centavos, SUM(desconto_centavos) AS descontos_centavos
+       FROM vendas WHERE status = 'concluida' AND data BETWEEN $de AND $ate
+       GROUP BY usuario_nome ORDER BY total_centavos DESC`,
+    )
+    .all({ de, ate }) as Array<{ nome: string; vendas: number; total_centavos: number; lucro_bruto_centavos: number; descontos_centavos: number }>;
+  const canceladas = db
+    .query(
+      `SELECT cancelada_por AS nome, COUNT(*) AS quantidade FROM vendas
+       WHERE status = 'cancelada' AND data BETWEEN $de AND $ate GROUP BY cancelada_por`,
+    )
+    .all({ de, ate }) as Array<{ nome: string; quantidade: number }>;
+  return {
+    de,
+    ate,
+    vendedores: linhas.map((l) => ({ ...l, ticket_medio_centavos: l.vendas > 0 ? Math.round(l.total_centavos / l.vendas) : null })),
+    cancelamentos: canceladas,
   };
 }

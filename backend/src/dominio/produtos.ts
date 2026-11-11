@@ -5,6 +5,7 @@ import { ErroNegocio, naoEncontrado } from "../erros";
 import { UNIDADES, deMil, quantidadeTexto, validarQuantidadeMil, type Unidade } from "../quantidade";
 import { agoraIso } from "../relogio";
 import { movimentarEstoque } from "./movimento-estoque";
+import { faixasDeTodos, faixasDoProduto, faixasParaApi, gravarFaixas, validarFaixas, type FaixaPreco, type FaixaPrecoApi } from "./precos";
 
 export interface DadosProduto {
   nome: string;
@@ -17,6 +18,12 @@ export interface DadosProduto {
   estoque_minimo_mil: number;
   controla_estoque: boolean;
   observacao: string;
+  /** Produzido pela própria loja (entra em "Produzir" na sugestão de produção). Sem valor: mantém o atual. */
+  fabricado?: boolean;
+  /** Produz em lotes deste tamanho (0 = sem lote). Sem valor: mantém o atual. */
+  lote_producao_mil?: number;
+  /** Tabela de preços por quantidade. Sem valor: mantém a atual; lista vazia: apaga. */
+  faixas_preco?: Array<{ quantidade_mil: number; preco_centavos: number }>;
 }
 
 export interface NovoProduto extends DadosProduto {
@@ -39,6 +46,8 @@ export interface LinhaProduto {
   observacao: string;
   criado_em: string;
   atualizado_em: string;
+  fabricado: number;
+  lote_producao_mil: number;
 }
 
 export type SituacaoEstoque = "sem_controle" | "negativo" | "zerado" | "baixo" | "ok";
@@ -64,6 +73,10 @@ export interface Produto {
   observacao: string;
   criado_em: string;
   atualizado_em: string;
+  fabricado: boolean;
+  lote_producao: number;
+  /** "A partir de X, cada um sai por Y", em ordem crescente de quantidade. */
+  precos_quantidade: FaixaPrecoApi[];
 }
 
 /** Texto em minúsculas e sem acentos, para a busca achar "balao" em "Balão". */
@@ -88,7 +101,7 @@ export function situacaoEstoque(l: Pick<LinhaProduto, "controla_estoque" | "esto
   return "ok";
 }
 
-export function paraProduto(l: LinhaProduto): Produto {
+export function paraProduto(l: LinhaProduto, faixas: FaixaPreco[] = []): Produto {
   const lucro = l.preco_centavos - l.custo_centavos;
   return {
     id: l.id,
@@ -109,6 +122,9 @@ export function paraProduto(l: LinhaProduto): Produto {
     observacao: l.observacao,
     criado_em: l.criado_em,
     atualizado_em: l.atualizado_em,
+    fabricado: l.fabricado === 1,
+    lote_producao: deMil(l.lote_producao_mil),
+    precos_quantidade: faixasParaApi(faixas),
   };
 }
 
@@ -123,7 +139,7 @@ export function exigirProduto(db: Banco, id: number): LinhaProduto {
 }
 
 export function obterProduto(db: Banco, id: number): Produto {
-  return paraProduto(exigirProduto(db, id));
+  return paraProduto(exigirProduto(db, id), faixasDoProduto(db, id));
 }
 
 export interface FiltroProdutos {
@@ -149,7 +165,8 @@ export function listarProdutos(db: Banco, filtro: FiltroProdutos = {}): Produto[
   const linhas = db
     .query(`SELECT * FROM produtos ${where} ORDER BY ativo DESC, nome COLLATE NOCASE`)
     .all(params) as LinhaProduto[];
-  return linhas.map(paraProduto);
+  const faixas = faixasDeTodos(db);
+  return linhas.map((l) => paraProduto(l, faixas.get(l.id)));
 }
 
 /** Procura pelo código de barras ou código interno exato (só produtos ativos). */
@@ -159,7 +176,7 @@ export function buscarPorCodigo(db: Banco, codigo: string): Produto | null {
   const l = db
     .query("SELECT * FROM produtos WHERE ativo = 1 AND (codigo_barras = $c OR codigo = $c) ORDER BY codigo_barras = $c DESC LIMIT 1")
     .get({ c }) as LinhaProduto | null;
-  return l ? paraProduto(l) : null;
+  return l ? paraProduto(l, faixasDoProduto(db, l.id)) : null;
 }
 
 export function categoriasDeProduto(db: Banco): string[] {
@@ -176,6 +193,13 @@ function validarDados(db: Banco, d: DadosProduto, idAtual: number | null): void 
   if (d.custo_centavos < 0) throw new ErroNegocio("O preço de custo não pode ser negativo.", 422, "custo_centavos");
   if (d.estoque_minimo_mil < 0) throw new ErroNegocio("O estoque mínimo não pode ser negativo.", 422, "estoque_minimo");
   if (d.estoque_minimo_mil > 0) validarQuantidadeMil(d.estoque_minimo_mil, d.unidade, "Estoque mínimo");
+  if (d.lote_producao_mil !== undefined) {
+    if (!Number.isSafeInteger(d.lote_producao_mil) || d.lote_producao_mil < 0) {
+      throw new ErroNegocio("O lote de produção não pode ser negativo.", 422, "lote_producao");
+    }
+    if (d.lote_producao_mil > 0) validarQuantidadeMil(d.lote_producao_mil, d.unidade, "Lote de produção");
+  }
+  if (d.faixas_preco) validarFaixas(d.faixas_preco, d.unidade);
 
   for (const [campo, rotulo] of [
     ["codigo_barras", "código de barras"],
@@ -229,9 +253,10 @@ export function criarProduto(db: Banco, dados: NovoProduto): Produto {
       .query(
         `INSERT INTO produtos
            (nome, codigo, codigo_barras, categoria, unidade, custo_centavos, preco_centavos,
-            estoque_mil, estoque_minimo_mil, controla_estoque, ativo, observacao, busca, criado_em, atualizado_em)
+            estoque_mil, estoque_minimo_mil, controla_estoque, ativo, observacao, busca, criado_em, atualizado_em,
+            fabricado, lote_producao_mil)
          VALUES ($nome, $codigo, $barras, $categoria, $unidade, $custo, $preco,
-                 0, $minimo, $controla, 1, $obs, $busca, $agora, $agora)
+                 0, $minimo, $controla, 1, $obs, $busca, $agora, $agora, $fabricado, $lote)
          RETURNING id`,
       )
       .get({
@@ -247,7 +272,10 @@ export function criarProduto(db: Banco, dados: NovoProduto): Produto {
         obs: dados.observacao.trim(),
         busca: textoDeBusca(dados),
         agora,
+        fabricado: dados.fabricado ? 1 : 0,
+        lote: dados.lote_producao_mil ?? 0,
       }) as { id: number };
+    if (dados.faixas_preco?.length) gravarFaixas(db, id, dados.faixas_preco);
 
     registrarAlteracaoPreco(
       db,
@@ -273,6 +301,12 @@ export function atualizarProduto(db: Banco, id: number, dados: DadosProduto & { 
   return transacao(db, () => {
     const atual = exigirProduto(db, id);
     validarDados(db, dados, id);
+    if (dados.faixas_preco === undefined && dados.unidade !== atual.unidade) {
+      validarFaixas(
+        faixasDoProduto(db, id).map((f) => ({ quantidade_mil: f.quantidade_minima_mil, preco_centavos: f.preco_centavos })),
+        dados.unidade,
+      );
+    }
     if (!UNIDADES[dados.unidade].fracionavel && atual.estoque_mil % 1000 !== 0) {
       throw new ErroNegocio(
         `O estoque atual (${quantidadeTexto(atual.estoque_mil)}) tem fração; ajuste o estoque antes de mudar para ${UNIDADES[dados.unidade].nome}.`,
@@ -284,7 +318,8 @@ export function atualizarProduto(db: Banco, id: number, dados: DadosProduto & { 
       `UPDATE produtos SET
          nome = $nome, codigo = $codigo, codigo_barras = $barras, categoria = $categoria, unidade = $unidade,
          custo_centavos = $custo, preco_centavos = $preco, estoque_minimo_mil = $minimo,
-         controla_estoque = $controla, ativo = $ativo, observacao = $obs, busca = $busca, atualizado_em = $agora
+         controla_estoque = $controla, ativo = $ativo, observacao = $obs, busca = $busca, atualizado_em = $agora,
+         fabricado = $fabricado, lote_producao_mil = $lote
        WHERE id = $id`,
     ).run({
       id,
@@ -301,7 +336,10 @@ export function atualizarProduto(db: Banco, id: number, dados: DadosProduto & { 
       obs: dados.observacao.trim(),
       busca: textoDeBusca(dados),
       agora: agoraIso(),
+      fabricado: dados.fabricado === undefined ? atual.fabricado : dados.fabricado ? 1 : 0,
+      lote: dados.lote_producao_mil ?? atual.lote_producao_mil,
     });
+    if (dados.faixas_preco !== undefined) gravarFaixas(db, id, dados.faixas_preco);
     if (atual.custo_centavos !== dados.custo_centavos || atual.preco_centavos !== dados.preco_centavos) {
       registrarAlteracaoPreco(
         db,
@@ -336,6 +374,7 @@ export function excluirProduto(db: Banco, id: number): { acao: "excluido" | "ina
     }
     db.query("DELETE FROM movimentos_estoque WHERE produto_id = $id").run({ id });
     db.query("DELETE FROM alteracoes_preco WHERE produto_id = $id").run({ id });
+    db.query("DELETE FROM precos_quantidade WHERE produto_id = $id").run({ id });
     db.query("DELETE FROM produtos WHERE id = $id").run({ id });
     return { acao: "excluido" as const };
   });
@@ -393,4 +432,13 @@ export function historicoDoProduto(db: Banco, id: number): HistoricoProduto {
     })),
     alteracoes_preco: alteracoes,
   };
+}
+
+/** Marca se o produto é feito pela loja (Produzir) ou comprado para revenda (Comprar). */
+export function definirFabricado(db: Banco, id: number, fabricado: boolean): Produto {
+  return transacao(db, () => {
+    exigirProduto(db, id);
+    db.query("UPDATE produtos SET fabricado = $f, atualizado_em = $agora WHERE id = $id").run({ id, f: fabricado ? 1 : 0, agora: agoraIso() });
+    return obterProduto(db, id);
+  });
 }

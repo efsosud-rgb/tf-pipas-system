@@ -1,26 +1,30 @@
-import { DatabaseBackup, Download, FolderOpen, HardDriveUpload, Plus, Power, RotateCcw, Save } from "lucide-react";
+import { DatabaseBackup, Download, FolderOpen, HardDriveUpload, KeyRound, Pencil, Plus, Power, Printer, RotateCcw, Save, ShieldCheck, UserPlus } from "lucide-react";
 import { useState } from "react";
-import { api, mensagemDeErro } from "../api";
+import { api, ErroApi, mensagemDeErro } from "../api";
+import { carregarEstado, sair, useUsuario } from "../auth";
+import { imprimirNoPapel } from "../componentes/comprovante";
 import { avisar, confirmar } from "../componentes/avisos";
-import { Abas, AvisoErro, Botao, Campo, Cabecalho, Carregando, Cartao, cx, Entrada, Etiqueta, Interruptor, Selecao, Vazio } from "../componentes/ui";
-import { bpParaTexto, data, tamanhoArquivo, textoParaBp } from "../formato";
+import { Abas, AvisoErro, Botao, Campo, CampoSenha, Cabecalho, Carregando, Cartao, cx, Entrada, Etiqueta, Interruptor, Modal, Selecao, Vazio } from "../componentes/ui";
+import { bpParaTexto, data, dataHora, tamanhoArquivo, textoParaBp } from "../formato";
 import { avisarMudanca, useApi } from "../hooks";
 import { parametrosDaRota } from "../rotas";
-import type { Categoria, Config, FormaPagamento, InfoBackup, Saude, TipoLancamento } from "../tipos";
+import type { Categoria, Config, FormaPagamento, InfoBackup, Perfil, Permissao, Saude, TipoLancamento, Usuario } from "../tipos";
+import { FolhaCodigo } from "./Capa";
 
-type Secao = "loja" | "formas" | "categorias" | "backup" | "sistema";
+type Secao = "loja" | "usuarios" | "formas" | "categorias" | "backup" | "sistema";
 
 export default function Configuracoes() {
   const [secao, setSecao] = useState<Secao>(() => {
     const s = parametrosDaRota().get("secao") as Secao | null;
-    return s && ["loja", "formas", "categorias", "backup", "sistema"].includes(s) ? s : "loja";
+    return s && ["loja", "usuarios", "formas", "categorias", "backup", "sistema"].includes(s) ? s : "loja";
   });
   return (
     <div className="flex flex-col gap-5">
-      <Cabecalho rotulo="Ajustes" titulo="Configurações" descricao="Dados da loja, taxas das maquininhas, categorias do financeiro, cópias de segurança e o programa." />
+      <Cabecalho rotulo="Ajustes" titulo="Configurações" descricao="Dados da loja, usuários, taxas das maquininhas, categorias do financeiro, cópias de segurança e o programa." />
       <Abas
         abas={[
           { id: "loja", rotulo: "Loja e comprovante" },
+          { id: "usuarios", rotulo: "Usuários" },
           { id: "formas", rotulo: "Formas de pagamento" },
           { id: "categorias", rotulo: "Categorias do financeiro" },
           { id: "backup", rotulo: "Cópias de segurança" },
@@ -30,6 +34,7 @@ export default function Configuracoes() {
         aoMudar={setSecao}
       />
       {secao === "loja" && <SecaoLoja />}
+      {secao === "usuarios" && <SecaoUsuarios />}
       {secao === "formas" && <SecaoFormas />}
       {secao === "categorias" && <SecaoCategorias />}
       {secao === "backup" && <SecaoBackup />}
@@ -105,6 +110,345 @@ function SecaoLoja() {
         </Botao>
       </div>
     </form>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Usuários e permissões                                                */
+/* ------------------------------------------------------------------ */
+const PERMISSOES: Array<{ id: Exclude<Permissao, "vender" | "administrar">; titulo: string; texto: string }> = [
+  { id: "desconto", titulo: "Dar desconto", texto: "Lançar desconto em R$ ou % na frente de caixa." },
+  { id: "cancelar_venda", titulo: "Cancelar venda", texto: "Devolve os produtos ao estoque e o dinheiro sai da gaveta." },
+  { id: "produtos", titulo: "Produtos, estoque e produção", texto: "Cadastrar e mudar preços, entradas, ajustes e produção. Vê o custo." },
+  { id: "financeiro", titulo: "Financeiro e relatórios", texto: "Início, contas, fluxo de caixa, DRE e relatórios. Vê custo, lucro e despesas." },
+];
+
+function SecaoUsuarios() {
+  const lista = useApi<Usuario[]>("/api/usuarios");
+  const eu = useUsuario();
+  const [editando, setEditando] = useState<Usuario | "novo" | null>(null);
+  const [senhaDe, setSenhaDe] = useState<Usuario | null>(null);
+  const [codigo, setCodigo] = useState<string | null>(null);
+  const [gerando, setGerando] = useState(false);
+  const config = useApi<Config>("/api/config");
+
+  async function gerarCodigo() {
+    const r = await confirmar({
+      titulo: "Gerar um novo código de recuperação?",
+      texto: "O código antigo deixa de valer na hora. O novo aparece uma única vez: anote ou imprima e guarde longe do caixa.",
+      confirmar: "Gerar novo código",
+    });
+    if (!r.ok) return;
+    setGerando(true);
+    try {
+      const res = await api.post<{ codigo_recuperacao: string }>("/api/usuarios/codigo-recuperacao");
+      setCodigo(res.codigo_recuperacao);
+    } catch (e) {
+      avisar(mensagemDeErro(e), "erro");
+    } finally {
+      setGerando(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1.7fr_1fr]">
+      <Cartao
+        rotulo="Quem usa o sistema"
+        titulo="Usuários"
+        corpo={false}
+        acoes={
+          <Botao icone={<UserPlus className="size-4" />} onClick={() => setEditando("novo")}>
+            Novo usuário
+          </Botao>
+        }
+      >
+        {lista.erro && (
+          <div className="p-4">
+            <AvisoErro mensagem={lista.erro} aoTentar={lista.recarregar} />
+          </div>
+        )}
+        {!lista.dados ? (
+          lista.erro ? null : <Carregando />
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="tabela">
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Perfil</th>
+                  <th>Pode</th>
+                  <th>Último acesso</th>
+                  <th className="num">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lista.dados.map((u) => (
+                  <tr key={u.id} className={cx(!u.ativo && "opacity-55")}>
+                    <td>
+                      <p className="font-semibold">
+                        {u.nome}
+                        {eu?.id === u.id && <span className="ml-1.5 text-[11.5px] font-semibold text-suave">(você)</span>}
+                      </p>
+                      {!u.ativo && <Etiqueta>Desativado</Etiqueta>}
+                    </td>
+                    <td>{u.perfil === "administrador" ? <Etiqueta tom="escuro">Administrador</Etiqueta> : <Etiqueta>Funcionário</Etiqueta>}</td>
+                    <td className="max-w-[320px] text-[12.5px] text-[#4a4d52]">
+                      {u.perfil === "administrador"
+                        ? "Tudo, inclusive usuários e configurações"
+                        : ["Vender e caixa", ...PERMISSOES.filter((x) => u.permissoes.includes(x.id)).map((x) => x.titulo.toLowerCase())].join(" · ")}
+                    </td>
+                    <td className="text-[12.5px] text-suave">{u.ultimo_acesso_em ? dataHora(u.ultimo_acesso_em) : "nunca entrou"}</td>
+                    <td className="num">
+                      <div className="inline-flex gap-1">
+                        <Botao variante="fantasma" tamanho="sm" icone={<Pencil className="size-3.5" />} onClick={() => setEditando(u)}>
+                          Editar
+                        </Botao>
+                        <Botao variante="fantasma" tamanho="sm" icone={<KeyRound className="size-3.5" />} onClick={() => setSenhaDe(u)}>
+                          Senha
+                        </Botao>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="border-t border-[#efefeb] px-5 py-3 text-[12px] text-suave">
+          Cada venda, abertura e fechamento de caixa fica no nome de quem estava logado. Para alguém sair da equipe, desative o usuário: o histórico continua com o nome dele.
+        </p>
+      </Cartao>
+
+      <div className="flex flex-col gap-4">
+        <Cartao rotulo="Segurança" titulo="Código de recuperação">
+          <p className="text-[13px] leading-relaxed text-[#4a4d52]">
+            Se um administrador esquecer a senha, ele usa este código na tela de entrada (“Esqueci a senha”) para criar outra. Funcionário que esqueceu a senha: troque aqui, no botão
+            “Senha”.
+          </p>
+          <p className="mt-2 text-[13px] leading-relaxed text-[#4a4d52]">Perdeu o código, ou alguém pode ter visto? Gere outro: o antigo deixa de valer.</p>
+          <Botao className="mt-3" variante="secundario" icone={<ShieldCheck className="size-4" />} carregando={gerando} onClick={() => void gerarCodigo()}>
+            Gerar novo código
+          </Botao>
+        </Cartao>
+        <Cartao rotulo="Como funciona" titulo="Perfis">
+          <ul className="space-y-2 text-[13px] text-[#4a4d52]">
+            <li>
+              <b className="text-tinta">Administrador:</b> vê e faz tudo, cadastra usuários e mexe nas configurações e backups.
+            </li>
+            <li>
+              <b className="text-tinta">Funcionário:</b> vende, abre e fecha o caixa. O resto você libera por pessoa (desconto, cancelamento, produtos, financeiro).
+            </li>
+            <li>A sessão termina depois de 14 horas sem uso; o sistema volta para a tela de entrada.</li>
+          </ul>
+        </Cartao>
+      </div>
+
+      {editando && (
+        <FormularioUsuario
+          usuario={editando === "novo" ? null : editando}
+          aoFechar={() => setEditando(null)}
+          aoSalvar={(u) => {
+            lista.recarregar();
+            if (eu && u.id === eu.id) void carregarEstado().catch(() => undefined);
+          }}
+        />
+      )}
+      {senhaDe && <SenhaDoUsuario usuario={senhaDe} aoFechar={() => setSenhaDe(null)} />}
+      {codigo && (
+        <Modal
+          aberto
+          aoFechar={() => setCodigo(null)}
+          titulo="Novo código de recuperação"
+          subtitulo="Aparece só agora. O código anterior já não vale."
+          largura="sm"
+          rodape={
+            <>
+              <Botao
+                variante="secundario"
+                icone={<Printer className="size-4" />}
+                onClick={() => imprimirNoPapel(<FolhaCodigo codigo={codigo} lojaNome={config.dados?.loja_nome ?? ""} usuario={eu?.nome ?? ""} geradoEm={new Date().toISOString()} />)}
+              >
+                Imprimir
+              </Botao>
+              <Botao onClick={() => setCodigo(null)}>Anotei, fechar</Botao>
+            </>
+          }
+        >
+          <p data-testid="novo-codigo" className="rounded-2xl border border-borda bg-[#f6f6f3] px-4 py-4 text-center font-mono text-[24px] font-bold tracking-[.14em] select-all">
+            {codigo}
+          </p>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function FormularioUsuario({ usuario, aoFechar, aoSalvar }: { usuario: Usuario | null; aoFechar: () => void; aoSalvar: (u: Usuario) => void }) {
+  const [nome, setNome] = useState(usuario?.nome ?? "");
+  const [perfil, setPerfil] = useState<Perfil>(usuario?.perfil ?? "funcionario");
+  const [extras, setExtras] = useState<Permissao[]>(() => (usuario ? usuario.permissoes.filter((p) => PERMISSOES.some((x) => x.id === p)) : []));
+  const [ativo, setAtivo] = useState(usuario?.ativo ?? true);
+  const [senha, setSenha] = useState("");
+  const [confirma, setConfirma] = useState("");
+  const [erro, setErro] = useState<{ texto: string; campo: string | null } | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  const erroDe = (c: string) => (erro?.campo === c ? erro.texto : null);
+
+  async function salvar(e: React.FormEvent) {
+    e.preventDefault();
+    if (nome.trim().length < 2) return setErro({ texto: "Informe o nome (pelo menos 2 letras).", campo: "nome" });
+    if (!usuario) {
+      if (senha.length < 4) return setErro({ texto: "A senha precisa ter pelo menos 4 caracteres.", campo: "senha" });
+      if (senha !== confirma) return setErro({ texto: "A confirmação não é igual à senha.", campo: "confirma" });
+    }
+    setEnviando(true);
+    setErro(null);
+    try {
+      const permissoes = perfil === "administrador" ? [] : extras;
+      const salvo = usuario
+        ? await api.put<Usuario>(`/api/usuarios/${usuario.id}`, { nome: nome.trim(), perfil, permissoes, ativo })
+        : await api.post<Usuario>("/api/usuarios", { nome: nome.trim(), perfil, permissoes, senha });
+      avisar(usuario ? "Usuário atualizado." : `Usuário "${salvo.nome}" cadastrado.`);
+      aoSalvar(salvo);
+      aoFechar();
+    } catch (er) {
+      setErro({ texto: mensagemDeErro(er), campo: er instanceof ErroApi ? er.campo : null });
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <Modal
+      aberto
+      aoFechar={aoFechar}
+      titulo={usuario ? `Editar ${usuario.nome}` : "Novo usuário"}
+      subtitulo={usuario ? `Cadastrado em ${dataHora(usuario.criado_em)}` : "A pessoa entra escolhendo o nome dela e digitando a senha."}
+      largura="md"
+      rodape={
+        <>
+          <Botao variante="secundario" onClick={aoFechar}>
+            Cancelar
+          </Botao>
+          <Botao type="submit" form="form-usuario" carregando={enviando}>
+            {usuario ? "Salvar" : "Cadastrar usuário"}
+          </Botao>
+        </>
+      }
+    >
+      <form id="form-usuario" onSubmit={salvar} className="space-y-4">
+        <Campo rotulo="Nome" erro={erroDe("nome")} dica="Como aparece na tela de entrada e nas vendas.">
+          <Entrada autoFocus value={nome} maxLength={40} onChange={(e) => setNome(e.target.value)} invalido={!!erroDe("nome")} />
+        </Campo>
+        <div>
+          <p className="mb-1.5 text-[12.5px] font-semibold text-[#3d4045]">Perfil</p>
+          <div className="grid gap-2 md:grid-cols-2">
+            {(
+              [
+                ["funcionario", "Funcionário", "Vende e cuida do caixa. Você escolhe o que mais ele pode."],
+                ["administrador", "Administrador", "Tudo, inclusive usuários, configurações e backups."],
+              ] as const
+            ).map(([id, titulo, texto]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={perfil === id}
+                onClick={() => setPerfil(id)}
+                className={cx("rounded-xl border px-3.5 py-3 text-left", perfil === id ? "border-tinta bg-[#f6f6f3] ring-1 ring-tinta" : "border-borda hover:border-[#bdbdb7]")}
+              >
+                <span className="block text-[13.5px] font-bold">{titulo}</span>
+                <span className="mt-0.5 block text-[12px] text-suave">{texto}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        {perfil === "funcionario" && (
+          <div className="rounded-2xl border border-borda p-4">
+            <p className="text-[13px] font-bold">Além de vender, este funcionário pode:</p>
+            <div className="mt-3 space-y-2.5">
+              {PERMISSOES.map((x) => (
+                <label key={x.id} className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4 accent-tinta"
+                    checked={extras.includes(x.id)}
+                    onChange={(e) => setExtras((l) => (e.target.checked ? [...l, x.id] : l.filter((p) => p !== x.id)))}
+                  />
+                  <span>
+                    <span className="block text-[13.5px] font-semibold">{x.titulo}</span>
+                    <span className="block text-[12px] text-suave">{x.texto}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        {!usuario && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <Campo rotulo="Senha" erro={erroDe("senha")} dica="Pelo menos 4 caracteres (pode ser só números).">
+              <CampoSenha value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
+            </Campo>
+            <Campo rotulo="Repita a senha" erro={erroDe("confirma")}>
+              <CampoSenha value={confirma} onChange={(e) => setConfirma(e.target.value)} autoComplete="new-password" />
+            </Campo>
+          </div>
+        )}
+        {usuario && (
+          <Interruptor ligado={ativo} aoMudar={setAtivo} rotulo="Usuário ativo" descricao="Desativado não aparece na tela de entrada e sai do sistema na hora." />
+        )}
+        {erro && !["nome", "senha", "confirma"].includes(erro.campo ?? "") && <AvisoErro mensagem={erro.texto} />}
+      </form>
+    </Modal>
+  );
+}
+
+function SenhaDoUsuario({ usuario, aoFechar }: { usuario: Usuario; aoFechar: () => void }) {
+  const [senha, setSenha] = useState("");
+  const [confirma, setConfirma] = useState("");
+  const [erro, setErro] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  async function salvar(e: React.FormEvent) {
+    e.preventDefault();
+    if (senha.length < 4) return setErro("A senha precisa ter pelo menos 4 caracteres.");
+    if (senha !== confirma) return setErro("A confirmação não é igual à senha.");
+    setEnviando(true);
+    setErro(null);
+    try {
+      await api.post(`/api/usuarios/${usuario.id}/senha`, { senha });
+      avisar(`Senha de ${usuario.nome} trocada.`);
+      aoFechar();
+    } catch (er) {
+      setErro(mensagemDeErro(er));
+      setEnviando(false);
+    }
+  }
+  return (
+    <Modal
+      aberto
+      aoFechar={aoFechar}
+      titulo={`Nova senha para ${usuario.nome}`}
+      subtitulo="Se a pessoa estiver logada em outro lugar, ela sai e entra de novo com a senha nova."
+      largura="sm"
+      rodape={
+        <>
+          <Botao variante="secundario" onClick={aoFechar}>
+            Cancelar
+          </Botao>
+          <Botao type="submit" form="form-senha-usuario" carregando={enviando}>
+            Trocar senha
+          </Botao>
+        </>
+      }
+    >
+      <form id="form-senha-usuario" onSubmit={salvar} className="space-y-4">
+        <Campo rotulo="Nova senha" dica="Pelo menos 4 caracteres (pode ser só números).">
+          <CampoSenha autoFocus value={senha} onChange={(e) => setSenha(e.target.value)} autoComplete="new-password" />
+        </Campo>
+        <Campo rotulo="Repita a nova senha">
+          <CampoSenha value={confirma} onChange={(e) => setConfirma(e.target.value)} autoComplete="new-password" />
+        </Campo>
+        {erro && <AvisoErro mensagem={erro} />}
+      </form>
+    </Modal>
   );
 }
 
@@ -308,6 +652,7 @@ const MOTIVOS: Record<InfoBackup["motivo"], string> = {
   fechamento: "Fechamento de caixa",
   "antes-de-restaurar": "Antes de restaurar",
   desligamento: "Ao desligar",
+  "antes-de-atualizar": "Antes de atualizar o programa",
 };
 
 function SecaoBackup() {
@@ -337,9 +682,7 @@ function SecaoBackup() {
     if (!r.ok) return;
     try {
       const res = await api.post<{ conferencia: { vendas: number; produtos: number } }>(`/api/backups/${encodeURIComponent(b.nome)}/restaurar`);
-      avisar(`Backup restaurado (${res.conferencia.produtos} produtos, ${res.conferencia.vendas} vendas).`);
-      avisarMudanca();
-      backups.recarregar();
+      await sair(`Backup restaurado (${res.conferencia.produtos} produtos, ${res.conferencia.vendas} vendas). Entre de novo com o seu usuário.`);
     } catch (e) {
       avisar(mensagemDeErro(e), "erro");
     }
@@ -356,9 +699,7 @@ function SecaoBackup() {
     form.append("arquivo", arquivo);
     try {
       const res = await api.enviarArquivo<{ conferencia: { vendas: number; produtos: number } }>("/api/backups/restaurar-arquivo", form);
-      avisar(`Arquivo restaurado (${res.conferencia.produtos} produtos, ${res.conferencia.vendas} vendas).`);
-      avisarMudanca();
-      backups.recarregar();
+      await sair(`Arquivo restaurado (${res.conferencia.produtos} produtos, ${res.conferencia.vendas} vendas). Entre de novo com o seu usuário.`);
     } catch (e) {
       avisar(mensagemDeErro(e), "erro");
     }

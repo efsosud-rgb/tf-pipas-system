@@ -1,17 +1,14 @@
-import { afterEach } from "bun:test";
 import { abrirBanco, type Banco } from "../src/banco";
 import { abrirCaixa } from "../src/dominio/caixa";
 import { criarProduto, type NovoProduto } from "../src/dominio/produtos";
 import { registrarVenda, type NovaVenda } from "../src/dominio/vendas";
-import { definirRelogio, restaurarRelogio } from "../src/relogio";
+import { definirRelogio } from "../src/relogio";
 
 // IDs das formas de pagamento criadas pela migração inicial (na ordem).
 export const DINHEIRO = 1;
 export const PIX = 2;
 export const DEBITO = 3;
 export const CREDITO = 4;
-
-afterEach(() => restaurarRelogio());
 
 export function bancoDeTeste(): Banco {
   return abrirBanco(":memory:");

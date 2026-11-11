@@ -1,50 +1,28 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { abrirBanco, fecharBanco } from "../src/banco";
-import type { Contexto } from "../src/contexto";
 import { conferirArquivoDeBanco, fazerBackup, listarBackups } from "../src/dominio/backup";
 import { CABECALHO_APP } from "../src/rotas";
-import { iniciarServidor } from "../src/servidor";
+import { servidorDeTeste } from "./ajuda-api";
 
-let pasta: string;
-let ctx: Contexto;
-let servidor: ReturnType<typeof iniciarServidor>;
+let srv: ReturnType<typeof servidorDeTeste>;
+let navegador: ReturnType<ReturnType<typeof servidorDeTeste>["cliente"]>;
 let base: string;
+let pasta: string;
+let ctx: ReturnType<typeof servidorDeTeste>["ctx"];
 
-beforeAll(() => {
-  pasta = mkdtempSync(join(tmpdir(), "tfpipas-teste-"));
-  const caminhoBanco = join(pasta, "tfpipas.db");
-  ctx = {
-    db: abrirBanco(caminhoBanco),
-    caminhoBanco,
-    pastaDados: pasta,
-    pastaBackups: join(pasta, "backups"),
-    versao: "teste",
-    porta: 0,
-    modoDev: false,
-    log: () => {},
-    desligar: () => {},
-  };
-  servidor = iniciarServidor(ctx, 0);
-  base = `http://127.0.0.1:${ctx.porta}`;
+beforeAll(async () => {
+  srv = servidorDeTeste();
+  ({ base, pasta, ctx } = srv);
+  navegador = srv.cliente();
+  await navegador.primeiroAcesso("Thiago", "1234");
 });
 
-afterAll(() => {
-  servidor.stop(true);
-  fecharBanco(ctx.db);
-  rmSync(pasta, { recursive: true, force: true });
-});
+afterAll(() => srv.encerrar());
 
-async function chamar(metodo: string, caminho: string, corpo?: unknown, cabecalhos: Record<string, string> = {}) {
-  const r = await fetch(base + caminho, {
-    method: metodo,
-    headers: { "Content-Type": "application/json", [CABECALHO_APP]: "1", ...cabecalhos },
-    body: corpo === undefined ? undefined : JSON.stringify(corpo),
-  });
-  const texto = await r.text();
-  return { status: r.status, dados: texto ? JSON.parse(texto) : null };
+function chamar(metodo: string, caminho: string, corpo?: unknown, cabecalhos: Record<string, string> = {}) {
+  return navegador.chamar(metodo, caminho, corpo, cabecalhos);
 }
 
 describe("API", () => {
@@ -140,12 +118,16 @@ describe("backup", () => {
     await chamar("POST", "/api/produtos", { nome: "Produto depois do backup", custo_centavos: 1, preco_centavos: 2 });
     const antes = (await chamar("GET", "/api/produtos")).dados.length;
 
-    const baixado = await fetch(`${base}/api/backups/${criado.dados.nome}`);
+    const baixado = await fetch(`${base}/api/backups/${criado.dados.nome}`, { headers: { Cookie: navegador.cookie } });
     expect(baixado.headers.get("content-disposition")).toContain(criado.dados.nome);
     expect((await baixado.arrayBuffer()).byteLength).toBe(criado.dados.tamanho_bytes);
 
     const restaurado = await chamar("POST", `/api/backups/${criado.dados.nome}/restaurar`);
     expect(restaurado.status).toBe(200);
+    expect(restaurado.dados.entrar_de_novo).toBe(true);
+    // depois de restaurar, todo mundo entra de novo (as sessões do banco antigo não valem)
+    expect((await chamar("GET", "/api/produtos")).status).toBe(401);
+    expect((await navegador.entrar("Thiago", "1234")).status).toBe(200);
     expect((await chamar("GET", "/api/produtos")).dados.length).toBe(antes - 1);
     expect(listarBackups(ctx.pastaBackups).some((b) => b.motivo === "antes-de-restaurar")).toBe(true);
   });
@@ -158,8 +140,15 @@ describe("backup", () => {
 
     const form = new FormData();
     form.append("arquivo", Bun.file(join(pasta, "pendrive", backup.nome)));
-    const r = await fetch(`${base}/api/backups/restaurar-arquivo`, { method: "POST", headers: { [CABECALHO_APP]: "1" }, body: form });
+    const r = await fetch(`${base}/api/backups/restaurar-arquivo`, {
+      method: "POST",
+      headers: { [CABECALHO_APP]: "1", Cookie: navegador.cookie },
+      body: form,
+    });
     expect(r.status).toBe(200);
+    // o backup do pendrive não tem usuários: o sistema volta ao primeiro acesso
+    expect((await chamar("GET", "/api/auth/estado")).dados.primeiro_acesso).toBe(true);
+    await navegador.primeiroAcesso("Thiago", "1234");
     expect(((await chamar("GET", "/api/produtos")).dados as Array<{ nome: string }>).map((p) => p.nome)).toEqual(["Do pendrive"]);
   });
 

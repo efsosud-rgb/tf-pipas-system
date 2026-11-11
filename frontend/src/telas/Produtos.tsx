@@ -22,10 +22,10 @@ import {
   Selecao,
   Vazio,
 } from "../componentes/ui";
-import { data, dataHora, normalizar, plural, porcento, quantidade, reais, textoParaCentavos, textoParaQuantidade } from "../formato";
+import { data, dataHora, normalizar, plural, porcento, quantidade, quantidadeParaCampo, reais, textoParaCentavos, textoParaQuantidade } from "../formato";
 import { avisarMudanca, useApi } from "../hooks";
 import { parametrosDaRota } from "../rotas";
-import type { Entrada as EntradaMercadoria, HistoricoProduto, Produto, RelatorioEstoque, SituacaoEstoque, Unidade, UnidadeInfo } from "../tipos";
+import type { AlertaEstoque, Entrada as EntradaMercadoria, HistoricoProduto, Produto, RelatorioEstoque, SituacaoEstoque, Unidade, UnidadeInfo } from "../tipos";
 
 const ROTULO_SITUACAO: Record<SituacaoEstoque, { texto: string; tom: "ok" | "alerta" | "perigo" | "neutro" }> = {
   ok: { texto: "Em estoque", tom: "ok" },
@@ -43,6 +43,8 @@ export default function Produtos() {
   const lista = useApi<Produto[]>(`/api/produtos${consulta({ inativos: inativos ? 1 : undefined })}`);
   const estoque = useApi<RelatorioEstoque>("/api/relatorios/estoque");
   const unidades = useApi<UnidadeInfo[]>("/api/unidades");
+  const alertas = useApi<AlertaEstoque[]>("/api/estoque/alertas");
+  const [soAcabando, setSoAcabando] = useState(() => parametrosDaRota().get("filtro") === "acabando");
   const [editando, setEditando] = useState<Produto | "novo" | null>(() => (parametrosDaRota().get("novo") === "1" ? "novo" : null));
   const [ajuste, setAjuste] = useState<Produto | null>(null);
   const [historico, setHistorico] = useState<Produto | null>(null);
@@ -50,14 +52,27 @@ export default function Produtos() {
   const [importar, setImportar] = useState(false);
 
   const categorias = useMemo(() => [...new Set((lista.dados ?? []).map((p) => p.categoria).filter(Boolean))].sort(), [lista.dados]);
+  const alertaPorId = useMemo(() => new Map((alertas.dados ?? []).map((a) => [a.produto_id, a])), [alertas.dados]);
+  // acabando = zerado, negativo, no mínimo ou durando pouco no ritmo de venda (alerta do servidor)
+  const idsAcabando = useMemo(
+    () =>
+      new Set(
+        (lista.dados ?? [])
+          .filter((p) => p.ativo && p.controla_estoque && (alertaPorId.has(p.id) || ["baixo", "zerado", "negativo"].includes(p.situacao_estoque)))
+          .map((p) => p.id),
+      ),
+    [lista.dados, alertaPorId],
+  );
+  const totalAcabando = idsAcabando.size;
   const filtrados = useMemo(() => {
     const termos = normalizar(busca).split(/\s+/).filter(Boolean);
     return (lista.dados ?? []).filter((p) => {
+      if (soAcabando && !idsAcabando.has(p.id)) return false;
       if (categoria && p.categoria !== categoria) return false;
       const alvo = normalizar(`${p.nome} ${p.categoria} ${p.codigo ?? ""} ${p.codigo_barras ?? ""}`);
       return termos.every((t) => alvo.includes(t));
     });
-  }, [lista.dados, busca, categoria]);
+  }, [lista.dados, busca, categoria, soAcabando, idsAcabando]);
 
   async function excluir(p: Produto) {
     const r = await confirmar({
@@ -102,17 +117,21 @@ export default function Produtos() {
         <Kpi rotulo="Estoque a preço de custo" valor={reais(estoque.dados?.valor_a_custo_centavos)} dica="só o que tem saldo positivo" />
         <Kpi rotulo="Estoque a preço de venda" valor={reais(estoque.dados?.valor_a_preco_de_venda_centavos)} dica={estoque.dados ? `lucro potencial ${reais(estoque.dados.lucro_potencial_centavos)}` : undefined} />
         <Kpi
-          rotulo="Pedem atenção"
-          valor={estoque.dados ? estoque.dados.atencao.length : "—"}
-          dica={estoque.dados ? `${estoque.dados.zerados} zerados · ${estoque.dados.abaixo_do_minimo} no mínimo · ${estoque.dados.negativos} negativos` : undefined}
-          tom={estoque.dados && estoque.dados.atencao.length ? "alerta" : "neutro"}
+          rotulo="Acabando"
+          valor={alertas.dados ? alertas.dados.length : "—"}
+          dica={
+            alertas.dados
+              ? `${alertas.dados.filter((a) => a.motivo === "zerado" || a.motivo === "negativo").length} esgotados · ${alertas.dados.filter((a) => a.motivo === "abaixo_minimo").length} no mínimo · ${alertas.dados.filter((a) => a.motivo === "cobertura_curta").length} durando pouco`
+              : undefined
+          }
+          tom={alertas.dados?.length ? "alerta" : "neutro"}
         />
       </div>
 
       <Abas
         abas={[
           { id: "produtos", rotulo: "Produtos" },
-          { id: "entradas", rotulo: "Entradas de mercadoria" },
+          { id: "entradas", rotulo: "Entradas (compras e produção)" },
         ]}
         ativa={aba}
         aoMudar={setAba}
@@ -135,6 +154,18 @@ export default function Produtos() {
                 ))}
               </Selecao>
             </div>
+            <button
+              type="button"
+              aria-pressed={soAcabando}
+              onClick={() => setSoAcabando((v) => !v)}
+              className={cx(
+                "inline-flex h-10 items-center gap-2 rounded-xl border px-3.5 text-[13px] font-semibold transition-colors",
+                soAcabando ? "border-[#e0a43a] bg-[#fdf1dc] text-[#8a5300]" : "border-borda text-[#4a4d52] hover:border-[#c9c9c3]",
+              )}
+            >
+              Acabando
+              <span className={cx("rounded-full px-1.5 text-[11px] tabular-nums", soAcabando ? "bg-[#8a5300] text-white" : "bg-black/10")}>{totalAcabando}</span>
+            </button>
             <Interruptor ligado={inativos} aoMudar={setInativos} rotulo="Mostrar desativados" />
           </div>
           {lista.erro && (
@@ -156,7 +187,11 @@ export default function Produtos() {
               }
             />
           ) : filtrados.length === 0 ? (
-            <Vazio icone={<Search className="size-6" />} titulo="Nenhum produto com esse filtro" />
+            soAcabando && totalAcabando === 0 ? (
+              <Vazio icone={<Boxes className="size-6" />} titulo="Nenhum produto acabando" texto="Nenhum produto zerado, no estoque mínimo ou durando pouco no ritmo de venda atual." />
+            ) : (
+              <Vazio icone={<Search className="size-6" />} titulo="Nenhum produto com esse filtro" />
+            )
           ) : (
             <div className="overflow-x-auto">
               <table className="tabela">
@@ -176,14 +211,32 @@ export default function Produtos() {
                     <tr key={p.id} className={cx(!p.ativo && "opacity-55")}>
                       <td>
                         <p className="font-semibold">{p.nome}</p>
-                        <p className="text-[12px] text-suave">{[p.categoria, p.codigo, p.codigo_barras].filter(Boolean).join(" · ") || "—"}</p>
+                        <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-suave">
+                          {[p.categoria, p.codigo, p.codigo_barras].filter(Boolean).join(" · ") || "—"}
+                          {p.fabricado && <Etiqueta tom="neutro">fabricado</Etiqueta>}
+                          {p.precos_quantidade.length > 0 && (
+                            <span title={p.precos_quantidade.map((x) => `${quantidade(x.quantidade)}+ ${reais(x.preco_centavos)}`).join(" · ")}>
+                              <Etiqueta tom="info">atacado {quantidade(p.precos_quantidade[0]!.quantidade)}+</Etiqueta>
+                            </span>
+                          )}
+                        </p>
                       </td>
                       <td className="num font-semibold">{reais(p.preco_centavos)}</td>
                       <td className="num">{p.custo_centavos === 0 ? <span className="text-alerta">sem custo</span> : reais(p.custo_centavos)}</td>
                       <td className={cx("num", p.margem_bp !== null && p.margem_bp < 0 && "text-perigo")}>{porcento(p.margem_bp)}</td>
                       <td className="num">{p.controla_estoque ? quantidade(p.estoque, p.unidade) : "—"}</td>
                       <td>
-                        {!p.ativo ? <Etiqueta>Desativado</Etiqueta> : <Etiqueta tom={ROTULO_SITUACAO[p.situacao_estoque].tom}>{ROTULO_SITUACAO[p.situacao_estoque].texto}</Etiqueta>}
+                        {!p.ativo ? (
+                          <Etiqueta>Desativado</Etiqueta>
+                        ) : p.situacao_estoque === "ok" && alertaPorId.get(p.id)?.motivo === "cobertura_curta" ? (
+                          <span title={alertaPorId.get(p.id)!.texto}>
+                            <Etiqueta tom="alerta">Acabando</Etiqueta>
+                          </span>
+                        ) : (
+                          <span title={alertaPorId.get(p.id)?.texto}>
+                            <Etiqueta tom={ROTULO_SITUACAO[p.situacao_estoque].tom}>{ROTULO_SITUACAO[p.situacao_estoque].texto}</Etiqueta>
+                          </span>
+                        )}
                       </td>
                       <td className="num">
                         <div className="inline-flex gap-0.5">
@@ -259,10 +312,15 @@ function FormularioProduto({
     custo: produto?.custo_centavos ?? null,
     controla_estoque: produto?.controla_estoque ?? true,
     estoque_inicial: "",
-    estoque_minimo: produto ? quantidade(produto.estoque_minimo) : "",
+    estoque_minimo: produto && produto.estoque_minimo > 0 ? quantidadeParaCampo(produto.estoque_minimo) : "",
     observacao: produto?.observacao ?? "",
     ativo: produto?.ativo ?? true,
+    fabricado: produto?.fabricado ?? false,
+    lote: produto && produto.lote_producao > 0 ? quantidadeParaCampo(produto.lote_producao) : "",
   });
+  const [faixas, setFaixas] = useState<FaixaForm[]>(() =>
+    (produto?.precos_quantidade ?? []).map((x) => ({ chave: proximaChaveFaixa++, qtd: quantidadeParaCampo(x.quantidade), preco: x.preco_centavos })),
+  );
   const [erro, setErro] = useState<{ texto: string; campo: string | null } | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [continuar, setContinuar] = useState(false);
@@ -278,6 +336,19 @@ function FormularioProduto({
     if (!f.preco) return setErro({ texto: "Informe o preço de venda.", campo: "preco_centavos" });
     if (estoqueInicial === null) return setErro({ texto: "Estoque inicial inválido.", campo: "estoque_inicial" });
     if (estoqueMinimo === null) return setErro({ texto: "Estoque mínimo inválido.", campo: "estoque_minimo" });
+    const lote = f.lote.trim() ? textoParaQuantidade(f.lote) : 0;
+    if (lote === null) return setErro({ texto: "Lote de produção inválido.", campo: "lote_producao" });
+    const fracUnidade = unidades.find((u) => u.sigla === f.unidade)?.fracionavel ?? false;
+    const lidas: Array<{ quantidade: number; preco_centavos: number }> = [];
+    for (const x of faixas) {
+      if (!x.qtd.trim() && x.preco === null) continue; // linha em branco: ignora
+      const q = textoParaQuantidade(x.qtd);
+      if (q === null || q <= 1) return setErro({ texto: "Preço por quantidade: a faixa precisa começar acima de 1 (até 1 vale o preço normal).", campo: "precos_quantidade" });
+      if (!fracUnidade && !Number.isInteger(q)) return setErro({ texto: `Preço por quantidade: ${f.unidade} só aceita quantidade inteira.`, campo: "precos_quantidade" });
+      if (lidas.some((l) => l.quantidade === q)) return setErro({ texto: `Preço por quantidade: a quantidade ${quantidade(q)} aparece duas vezes.`, campo: "precos_quantidade" });
+      if (!x.preco) return setErro({ texto: `Preço por quantidade: informe o preço a partir de ${quantidade(q)}.`, campo: "precos_quantidade" });
+      lidas.push({ quantidade: q, preco_centavos: x.preco });
+    }
     setEnviando(true);
     setErro(null);
     const corpo = {
@@ -291,6 +362,9 @@ function FormularioProduto({
       controla_estoque: f.controla_estoque,
       estoque_minimo: estoqueMinimo,
       observacao: f.observacao,
+      fabricado: f.controla_estoque ? f.fabricado : false,
+      lote_producao: f.controla_estoque && f.fabricado ? lote : 0,
+      precos_quantidade: lidas.sort((x, y) => x.quantidade - y.quantidade),
     };
     try {
       if (produto) {
@@ -303,6 +377,7 @@ function FormularioProduto({
       avisarMudanca();
       if (!produto && continuar) {
         setF((x) => ({ ...x, nome: "", codigo: "", codigo_barras: "", preco: null, custo: null, estoque_inicial: "", observacao: "" }));
+        setFaixas([]);
       } else {
         aoFechar();
       }
@@ -363,6 +438,7 @@ function FormularioProduto({
             {lucro === null ? "—" : reais(lucro)} <span className="text-[13px] font-semibold text-suave">{margem === null ? "" : `· ${porcento(margem)}`}</span>
           </p>
         </div>
+        <TabelaDeFaixas faixas={faixas} aoMudar={setFaixas} precoNormal={f.preco} unidade={f.unidade} erro={erroDe("precos_quantidade")} />
         <Campo rotulo="Unidade de venda" className="md:col-span-2">
           <Selecao value={f.unidade} onChange={(e) => setF({ ...f, unidade: e.target.value as Unidade })}>
             {unidades.map((u) => (
@@ -404,9 +480,22 @@ function FormularioProduto({
                   <Entrada value={quantidade(produto.estoque, produto.unidade)} disabled />
                 </Campo>
               )}
-              <Campo rotulo="Estoque mínimo" erro={erroDe("estoque_minimo")} dica="Avisa quando chegar nesse número.">
+              <Campo rotulo="Estoque mínimo" erro={erroDe("estoque_minimo")} dica="Avisa “acabando” quando chegar nesse número.">
                 <Entrada inputMode="decimal" value={f.estoque_minimo} onChange={(e) => setF({ ...f, estoque_minimo: e.target.value })} placeholder="0" />
               </Campo>
+              <div className="md:col-span-2">
+                <Interruptor
+                  ligado={f.fabricado}
+                  aoMudar={(v) => setF({ ...f, fabricado: v })}
+                  rotulo="A loja fabrica este produto"
+                  descricao="Entra na sugestão de produção (e não na lista de compras) e pode receber registro de produção."
+                />
+              </div>
+              {f.fabricado && (
+                <Campo rotulo="Lote de produção" erro={erroDe("lote_producao")} dica="Opcional. A sugestão arredonda para múltiplos do lote (ex.: faz 10 por vez).">
+                  <Entrada inputMode="decimal" value={f.lote} onChange={(e) => setF({ ...f, lote: e.target.value })} placeholder="Sem lote" />
+                </Campo>
+              )}
             </div>
           )}
         </div>
@@ -420,6 +509,99 @@ function FormularioProduto({
         )}
       </form>
     </Modal>
+  );
+}
+
+interface FaixaForm {
+  chave: number;
+  qtd: string;
+  preco: number | null;
+}
+let proximaChaveFaixa = 1;
+
+/** Tabela de preços por quantidade (atacado) dentro do cadastro do produto. */
+function TabelaDeFaixas({
+  faixas,
+  aoMudar,
+  precoNormal,
+  unidade,
+  erro,
+}: {
+  faixas: FaixaForm[];
+  aoMudar: (f: FaixaForm[]) => void;
+  precoNormal: number | null;
+  unidade: string;
+  erro: string | null;
+}) {
+  const mudar = (chave: number, parte: Partial<FaixaForm>) => aoMudar(faixas.map((x) => (x.chave === chave ? { ...x, ...parte } : x)));
+  return (
+    <div className="rounded-2xl border border-borda p-4 md:col-span-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[13.5px] font-bold">Preço por quantidade (atacado)</p>
+          <p className="mt-0.5 max-w-xl text-[12.5px] text-suave">
+            Ex.: a partir de 10 {unidade}, cada um por R$ 4,50. Na venda vale a faixa de maior quantidade alcançada; abaixo da primeira, o preço normal.
+          </p>
+        </div>
+        <Botao
+          variante="secundario"
+          tamanho="sm"
+          icone={<Plus className="size-4" />}
+          disabled={faixas.length >= 10}
+          onClick={() => aoMudar([...faixas, { chave: proximaChaveFaixa++, qtd: "", preco: null }])}
+        >
+          Adicionar faixa
+        </Botao>
+      </div>
+      {faixas.length > 0 && (
+        <table className="tabela mt-3">
+          <thead>
+            <tr>
+              <th>A partir de</th>
+              <th className="num">Preço por {unidade}</th>
+              <th className="num">Comparado ao normal</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {faixas.map((x) => {
+              const diferenca = precoNormal && x.preco ? Math.round(((x.preco - precoNormal) * 10_000) / precoNormal) : null;
+              return (
+                <tr key={x.chave}>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      <Entrada
+                        className="w-24 text-right"
+                        inputMode="decimal"
+                        aria-label="A partir de quantos"
+                        value={x.qtd}
+                        onChange={(e) => mudar(x.chave, { qtd: e.target.value })}
+                        placeholder="10"
+                      />
+                      <span className="text-[13px] text-suave">{unidade}</span>
+                    </div>
+                  </td>
+                  <td className="num">
+                    <div className="ml-auto w-36">
+                      <CampoDinheiro valor={x.preco} aria-label="Preço na faixa" aoMudar={(v) => mudar(x.chave, { preco: v })} />
+                    </div>
+                  </td>
+                  <td className={cx("num text-[13px]", diferenca !== null && diferenca >= 0 ? "font-semibold text-alerta" : "text-sucesso")}>
+                    {diferenca === null ? "—" : diferenca >= 0 ? `${porcento(diferenca)} (não é desconto)` : `${porcento(-diferenca)} mais barato`}
+                  </td>
+                  <td className="num">
+                    <BotaoIcone rotulo="Tirar faixa" perigo onClick={() => aoMudar(faixas.filter((y) => y.chave !== x.chave))}>
+                      <Trash2 className="size-4" />
+                    </BotaoIcone>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {erro && <p className="mt-2 text-[12.5px] font-medium text-perigo">{erro}</p>}
+    </div>
   );
 }
 
@@ -797,7 +979,9 @@ function ListaEntradas({ aoNova }: { aoNova: () => void }) {
             <tr>
               <th>Nº</th>
               <th>Data</th>
+              <th>Tipo</th>
               <th>Fornecedor</th>
+              <th>Registrada por</th>
               <th className="num">Itens</th>
               <th className="num">Total</th>
               <th>Financeiro</th>
@@ -808,17 +992,32 @@ function ListaEntradas({ aoNova }: { aoNova: () => void }) {
               <tr key={e.id} className="clicavel" onClick={() => setAberta(e.id)}>
                 <td className="font-semibold">{e.id}</td>
                 <td>{data(e.data)}</td>
-                <td>{e.fornecedor || "—"}</td>
+                <td>{e.tipo === "producao" ? <Etiqueta tom="escuro">Produção</Etiqueta> : <Etiqueta>Compra</Etiqueta>}</td>
+                <td>{e.tipo === "producao" ? "—" : e.fornecedor || "—"}</td>
+                <td>{e.usuario_nome || "—"}</td>
                 <td className="num">{e.itens_quantidade}</td>
                 <td className="num font-semibold">{reais(e.total_centavos)}</td>
-                <td>{e.lancamento_id ? <Etiqueta tom="info">Lançada</Etiqueta> : <Etiqueta>Não lançada</Etiqueta>}</td>
+                <td>{e.tipo === "producao" ? <span className="text-suave">—</span> : e.lancamento_id ? <Etiqueta tom="info">Lançada</Etiqueta> : <Etiqueta>Não lançada</Etiqueta>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
       {aberta && (
-        <Modal aberto aoFechar={() => setAberta(null)} lado largura="lg" titulo={`Entrada nº ${aberta}`} subtitulo={detalhe.dados ? `${data(detalhe.dados.data)} · ${detalhe.dados.fornecedor || "sem fornecedor"}` : undefined}>
+        <Modal
+          aberto
+          aoFechar={() => setAberta(null)}
+          lado
+          largura="lg"
+          titulo={detalhe.dados?.tipo === "producao" ? `Produção nº ${aberta}` : `Entrada nº ${aberta}`}
+          subtitulo={
+            detalhe.dados
+              ? [data(detalhe.dados.data), detalhe.dados.tipo === "producao" ? null : detalhe.dados.fornecedor || "sem fornecedor", detalhe.dados.usuario_nome ? `por ${detalhe.dados.usuario_nome}` : null]
+                  .filter(Boolean)
+                  .join(" · ")
+              : undefined
+          }
+        >
           {!detalhe.dados ? (
             <Carregando />
           ) : (

@@ -77,6 +77,8 @@ export interface MovimentoGaveta {
   descricao: string;
   vendaId?: number | null;
   lancamentoId?: number | null;
+  /** Quem fez o movimento (usuário logado). */
+  usuarioNome?: string;
 }
 
 /**
@@ -98,8 +100,8 @@ export function lancarNaGaveta(db: Banco, m: MovimentoGaveta): void {
     }
   }
   db.query(
-    `INSERT INTO movimentos_caixa (sessao_id, tipo, valor_centavos, descricao, venda_id, lancamento_id, criado_em)
-     VALUES ($sessao, $tipo, $valor, $descricao, $venda, $lancamento, $agora)`,
+    `INSERT INTO movimentos_caixa (sessao_id, tipo, valor_centavos, descricao, venda_id, lancamento_id, criado_em, usuario_nome)
+     VALUES ($sessao, $tipo, $valor, $descricao, $venda, $lancamento, $agora, $usuario)`,
   ).run({
     sessao: m.sessaoId,
     tipo: m.tipo,
@@ -108,6 +110,7 @@ export function lancarNaGaveta(db: Banco, m: MovimentoGaveta): void {
     venda: m.vendaId ?? null,
     lancamento: m.lancamentoId ?? null,
     agora: agoraIso(),
+    usuario: m.usuarioNome ?? "",
   });
 }
 
@@ -146,6 +149,7 @@ export interface ResumoCaixa {
     venda_id: number | null;
     lancamento_id: number | null;
     criado_em: string;
+    usuario_nome: string;
   }>;
 }
 
@@ -153,7 +157,7 @@ export function resumoDoCaixa(db: Banco, sessaoId: number): ResumoCaixa {
   const sessao = obterSessao(db, sessaoId);
   const movimentos = db
     .query(
-      `SELECT id, tipo, valor_centavos, descricao, venda_id, lancamento_id, criado_em
+      `SELECT id, tipo, valor_centavos, descricao, venda_id, lancamento_id, criado_em, usuario_nome
        FROM movimentos_caixa WHERE sessao_id = $id ORDER BY id`,
     )
     .all({ id: sessaoId }) as ResumoCaixa["movimentos"];
@@ -214,7 +218,7 @@ export function resumoDoCaixa(db: Banco, sessaoId: number): ResumoCaixa {
   };
 }
 
-export function abrirCaixa(db: Banco, dados: { fundo_troco_centavos: number; operador: string }): ResumoCaixa {
+export function abrirCaixa(db: Banco, dados: { fundo_troco_centavos: number; operador: string }, autor?: { nome: string }): ResumoCaixa {
   return transacao(db, () => {
     const aberta = sessaoAberta(db);
     if (aberta) throw new ErroNegocio("Já existe um caixa aberto. Feche esse caixa antes de abrir outro.", 409);
@@ -229,7 +233,7 @@ export function abrirCaixa(db: Banco, dados: { fundo_troco_centavos: number; ope
       .get({
         agora: agoraIso(),
         hoje: dataLocal(),
-        operador: dados.operador.trim(),
+        operador: autor?.nome ?? dados.operador.trim(),
         fundo: dados.fundo_troco_centavos,
       }) as { id: number };
     lancarNaGaveta(db, {
@@ -237,6 +241,7 @@ export function abrirCaixa(db: Banco, dados: { fundo_troco_centavos: number; ope
       tipo: "abertura",
       valorCentavos: dados.fundo_troco_centavos,
       descricao: "Fundo de troco",
+      usuarioNome: autor?.nome,
     });
     return resumoDoCaixa(db, id);
   });
@@ -245,6 +250,7 @@ export function abrirCaixa(db: Banco, dados: { fundo_troco_centavos: number; ope
 export function sangriaOuSuprimento(
   db: Banco,
   dados: { tipo: "sangria" | "suprimento"; valor_centavos: number; descricao: string },
+  autor?: { nome: string },
 ): ResumoCaixa {
   return transacao(db, () => {
     const sessao = exigirCaixaAberto(db, dados.tipo === "sangria" ? "fazer uma sangria" : "fazer um suprimento");
@@ -257,6 +263,7 @@ export function sangriaOuSuprimento(
       tipo: dados.tipo,
       valorCentavos: dados.tipo === "sangria" ? -dados.valor_centavos : dados.valor_centavos,
       descricao: dados.descricao.trim() || padrao,
+      usuarioNome: autor?.nome,
     });
     return resumoDoCaixa(db, sessao.id);
   });
@@ -265,6 +272,7 @@ export function sangriaOuSuprimento(
 export function fecharCaixa(
   db: Banco,
   dados: { contado_centavos: number; operador: string; observacao: string },
+  autor?: { nome: string },
 ): ResumoCaixa {
   return transacao(db, () => {
     const sessao = exigirCaixaAberto(db, "fechá-lo");
@@ -282,7 +290,7 @@ export function fecharCaixa(
       id: sessao.id,
       agora: agoraIso(),
       hoje: dataLocal(),
-      operador: dados.operador.trim(),
+      operador: autor?.nome ?? dados.operador.trim(),
       esperado,
       contado: dados.contado_centavos,
       diferenca: dados.contado_centavos - esperado,
