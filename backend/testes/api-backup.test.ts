@@ -77,6 +77,18 @@ describe("API", () => {
     expect(q.dados.erro).toBe("Estoque inicial: use no máximo 3 casas decimais.");
   });
 
+  test("configuração da largura do papel do comprovante (80 mm padrão, 58 mm opcional)", async () => {
+    expect((await chamar("GET", "/api/config")).dados.comprovante_largura).toBe("80");
+    const r = await chamar("PUT", "/api/config", { comprovante_largura: "58" });
+    expect(r.status).toBe(200);
+    expect(r.dados.comprovante_largura).toBe("58");
+    expect(r.dados.loja_nome).toBe("TF Pipas");
+    const ruim = await chamar("PUT", "/api/config", { comprovante_largura: "110" });
+    expect(ruim.status).toBe(400);
+    expect((await chamar("GET", "/api/config")).dados.comprovante_largura).toBe("58");
+    await chamar("PUT", "/api/config", { comprovante_largura: "80" });
+  });
+
   test("fluxo completo: produto, caixa, venda com troco, resultado e cancelamento", async () => {
     const p = await chamar("POST", "/api/produtos", {
       nome: "Pipa raia",

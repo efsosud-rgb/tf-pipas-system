@@ -1,0 +1,47 @@
+TF PIPAS · GESTÃO DA LOJA
+=========================
+
+Como abrir
+----------
+Clique duas vezes no atalho "TF Pipas" da área de trabalho. O sistema abre numa
+janela própria (usa o Microsoft Edge que já vem no Windows). Não precisa de
+internet.
+
+Fechar a janela não desliga o programa: ele continua rodando escondido, pronto
+para abrir rápido. Para desligar de verdade: Configurações > Sistema >
+"Desligar o TF Pipas".
+
+Primeiro uso
+------------
+1. Configurações > Loja e comprovante: nome, CNPJ, endereço e telefone que saem
+   no comprovante; largura do papel da impressora (80 mm ou 58 mm).
+2. Configurações > Formas de pagamento: a taxa (%) de cada maquininha e do PIX.
+3. Produtos: cadastre os produtos (ou importe uma planilha CSV).
+4. Frente de caixa: abra o caixa com o fundo de troco e comece a vender.
+
+Atalhos da frente de caixa
+--------------------------
+F2   buscar / escanear produto        F4   desconto
+F8   pagamento em dinheiro            F9   concluir a venda
+3*codigo  vende 3 unidades de uma vez Ctrl+Del  limpar a venda
+
+Seus dados
+----------
+Ficam nesta pasta, em "dados" (banco tfpipas.db e a pasta "backups").
+Um backup é feito sozinho todo dia, no fechamento do caixa e ao desligar.
+COPIE UM BACKUP PARA UM PENDRIVE OU PARA A NUVEM TODA SEMANA
+(Configurações > Cópias de segurança > Baixar).
+Desinstalar o programa NÃO apaga a pasta "dados".
+
+O que ainda não faz
+-------------------
+- Não emite NFC-e (cupom fiscal). O comprovante impresso diz "não é documento
+  fiscal". Emitir NFC-e exige certificado digital A1, CSC da SEFAZ-RJ e um
+  serviço de emissão.
+- Não tem TEF (a maquininha não conversa com o sistema): o valor do cartão é
+  digitado na venda.
+- Funciona em um computador só (os dados não são compartilhados em rede).
+
+Requisitos
+----------
+Windows 10 (versão 1809 ou mais nova) ou Windows 11, 64 bits.

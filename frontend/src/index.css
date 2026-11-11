@@ -1,44 +1,174 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource/barlow-condensed/latin-800-italic.css";
+@import "@fontsource/barlow-condensed/latin-700-italic.css";
+@import "@fontsource/barlow-condensed/latin-600.css";
 
-:root {
-  --tf-carmim: #E63946;
-  --tf-orange: #F4A261;
-  --tf-yellow: #E9C46A;
-  --tf-dark: #0F172A;
-  --tf-glass-bg: rgba(15, 23, 42, 0.75);
-  --tf-glass-border: rgba(244, 162, 97, 0.2);
+/* Identidade TF Pipas: preto e branco da marca, céu e areia da praia da capa. */
+@theme {
+  --color-tinta: #0b0c0e;
+  --color-papel: #f2f2ef;
+  --color-borda: #e2e2dd;
+  --color-suave: #6c6f75;
+  --color-foco: #2a78c8;
+  --color-ceu: #6a9bcf;
+  --color-areia: #e3cfa6;
+  --color-sucesso: #12784a;
+  --color-alerta: #a86400;
+  --color-perigo: #c4262c;
+  --font-sans: "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  --font-marca: "Barlow Condensed", "Arial Narrow", "Inter Variable", sans-serif;
 }
 
-body {
-  margin: 0;
-  background-color: #0B1120;
-  color: #F8FAFC;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  overflow-x: hidden;
+@layer base {
+  html,
+  body,
+  #raiz {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--color-papel);
+    color: var(--color-tinta);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: #0b0c0e;
+    color: #fff;
+  }
+  input[type="date"] {
+    font-family: inherit;
+  }
+  button {
+    cursor: pointer;
+  }
+  table {
+    border-collapse: collapse;
+  }
 }
 
-.glass-panel {
-  background: rgba(15, 23, 42, 0.75);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+@layer components {
+  .rotulo {
+    font-size: 10.5px;
+    font-weight: 750;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #75787e;
+  }
+  .tabela {
+    width: 100%;
+    font-size: 13.5px;
+  }
+  .tabela th {
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 750;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7c7f85;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-borda);
+    white-space: nowrap;
+  }
+  .tabela td {
+    padding: 11px 12px;
+    border-bottom: 1px solid #efefeb;
+    vertical-align: middle;
+  }
+  .tabela tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .tabela tbody tr.clicavel {
+    cursor: pointer;
+  }
+  .tabela tbody tr.clicavel:hover td {
+    background: #fafaf8;
+  }
+  .num {
+    text-align: right !important;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .rolagem-fina {
+    scrollbar-width: thin;
+    scrollbar-color: #cfcfc9 transparent;
+  }
 }
 
-.glass-panel-glow {
-  background: rgba(15, 23, 42, 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(244, 162, 97, 0.25);
-  box-shadow: 0 0 25px -5px rgba(230, 57, 70, 0.25);
+@keyframes aparecer {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes entrarModal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+@keyframes entrarLado {
+  from {
+    transform: translateX(28px);
+    opacity: 0;
+  }
+}
+@keyframes entrarAviso {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+@keyframes subir {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+@keyframes entrarTela {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes pulsar {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
-.gradient-tf {
-  background: linear-gradient(135deg, #E63946 0%, #F4A261 50%, #E9C46A 100%);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
-.gradient-text {
-  background: linear-gradient(135deg, #E63946 0%, #F4A261 50%, #E9C46A 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+/* ------------------------------------------------------------------ */
+/* Impressão: só o comprovante sai no papel.                            */
+/* ------------------------------------------------------------------ */
+#impressao {
+  display: none;
+}
+@media print {
+  @page {
+    margin: 0;
+  }
+  body {
+    background: #fff;
+  }
+  #raiz,
+  body > *:not(#impressao) {
+    display: none !important;
+  }
+  #impressao {
+    display: block;
+  }
 }

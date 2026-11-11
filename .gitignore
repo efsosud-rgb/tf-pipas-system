@@ -2,6 +2,8 @@
 node_modules/
 frontend/dist/
 backend/dist/
+instalador/saida/
+__pycache__/
 
 # Dados locais (o banco da loja nunca vai para o GitHub)
 backend/dados-dev/

@@ -185,6 +185,7 @@ export const zConfig = z.object({
   loja_instagram: z.string().trim().max(60).optional(),
   loja_documento: z.string().trim().max(30).optional(),
   comprovante_mensagem: z.string().trim().max(160).optional(),
+  comprovante_largura: z.enum(["80", "58"]).optional(),
   permitir_estoque_negativo: z.boolean().optional(),
 });
 

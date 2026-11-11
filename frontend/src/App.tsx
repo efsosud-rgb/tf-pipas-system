@@ -1,240 +1,159 @@
-import React, { useState, useEffect } from 'react';
-import { Kite3DCanvas } from './components/Kite3DCanvas';
-import { PosView } from './components/PosView';
-import { FactoryView } from './components/FactoryView';
-import { FinancialView } from './components/FinancialView';
-import { AiAgentsView } from './components/AiAgentsView';
-import { Product, MaterialItem, ProductionOrder, DREData, CashFlowData, MLForecastMonth } from './types';
 import {
-  ShoppingCart,
-  Factory,
   BarChart3,
-  Bot,
-  Wind,
-  Sparkles,
-  Compass,
-  ShieldCheck,
-  Activity,
-  Box
-} from 'lucide-react';
+  Boxes,
+  Home,
+  Landmark,
+  Receipt,
+  Settings,
+  ShoppingCart,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import logoSelo from "./assets/logo-selo.svg";
+import { Avisos, Confirmacoes } from "./componentes/avisos";
+import { Carregando, cx } from "./componentes/ui";
+import { dataPorExtenso, doisDigitos, hora, reais } from "./formato";
+import { useAgora, useApi } from "./hooks";
+import { Capa } from "./telas/Capa";
+import type { ResumoCaixa, Saude } from "./tipos";
+import { irPara, lerRota, type Rota } from "./rotas";
 
-export function App() {
-  const [activeTab, setActiveTab] = useState<'pos' | 'factory' | 'financial' | 'ai' | '3d'>('pos');
-  const [products, setProducts] = useState<Product[]>([]);
-  const [materials, setMaterials] = useState<MaterialItem[]>([]);
-  const [orders, setOrders] = useState<ProductionOrder[]>([]);
-  const [dre, setDre] = useState<DREData | null>(null);
-  const [cashflow, setCashflow] = useState<CashFlowData | null>(null);
-  const [forecast, setForecast] = useState<MLForecastMonth[]>([]);
-  const [loading, setLoading] = useState(true);
+const Inicio = lazy(() => import("./telas/Inicio"));
+const Pdv = lazy(() => import("./telas/Pdv"));
+const Produtos = lazy(() => import("./telas/Produtos"));
+const Caixa = lazy(() => import("./telas/Caixa"));
+const Vendas = lazy(() => import("./telas/Vendas"));
+const Financeiro = lazy(() => import("./telas/Financeiro"));
+const Relatorios = lazy(() => import("./telas/Relatorios"));
+const Configuracoes = lazy(() => import("./telas/Configuracoes"));
 
-  const fetchData = async () => {
-    try {
-      // Backend Laravel
-      const [prodRes, matRes, ordRes, dreRes, cfRes] = await Promise.all([
-        fetch('http://127.0.0.1:8000/api/products').catch(() => null),
-        fetch('http://127.0.0.1:8000/api/materials').catch(() => null),
-        fetch('http://127.0.0.1:8000/api/production-orders').catch(() => null),
-        fetch('http://127.0.0.1:8000/api/financial/dre').catch(() => null),
-        fetch('http://127.0.0.1:8000/api/financial/cashflow').catch(() => null),
-      ]);
+const MENU: Array<{ rota: Rota; rotulo: string; icone: LucideIcon; atalho?: string }> = [
+  { rota: "inicio", rotulo: "Início", icone: Home },
+  { rota: "pdv", rotulo: "Frente de caixa", icone: ShoppingCart },
+  { rota: "produtos", rotulo: "Produtos e estoque", icone: Boxes },
+  { rota: "caixa", rotulo: "Controle de caixa", icone: Wallet },
+  { rota: "vendas", rotulo: "Vendas", icone: Receipt },
+  { rota: "financeiro", rotulo: "Financeiro", icone: Landmark },
+  { rota: "relatorios", rotulo: "Relatórios", icone: BarChart3 },
+  { rota: "configuracoes", rotulo: "Configurações", icone: Settings },
+];
 
-      if (prodRes && prodRes.ok) setProducts(await prodRes.json());
-      if (matRes && matRes.ok) setMaterials(await matRes.json());
-      if (ordRes && ordRes.ok) setOrders(await ordRes.json());
-      if (dreRes && dreRes.ok) setDre(await dreRes.json());
-      if (cfRes && cfRes.ok) setCashflow(await cfRes.json());
-
-      // AI Service FastAPI
-      const mlRes = await fetch('http://127.0.0.1:8001/api/ai/ml/projections').catch(() => null);
-      if (mlRes && mlRes.ok) {
-        const mlData = await mlRes.json();
-        setForecast(mlData.forecast);
-      }
-    } catch (e) {
-      console.error('Error fetching data:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
+export default function App() {
+  const [naCapa, setNaCapa] = useState(() => sessionStorage.getItem("tfpipas.entrou") !== "1");
+  const [rota, setRota] = useState<Rota>(lerRota);
 
   useEffect(() => {
-    fetchData();
+    const mudou = () => setRota(lerRota());
+    window.addEventListener("hashchange", mudou);
+    return () => window.removeEventListener("hashchange", mudou);
   }, []);
 
+  if (naCapa) {
+    return (
+      <>
+        <Capa
+          aoEntrar={(destino) => {
+            sessionStorage.setItem("tfpipas.entrou", "1");
+            irPara(destino);
+            setRota(destino);
+            setNaCapa(false);
+          }}
+        />
+        <Avisos />
+      </>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#0B1120] text-slate-100 flex flex-col selection:bg-red-500 selection:text-white">
-      {/* Top Banner & Header com 3D Kite Canvas Interativo */}
-      <header className="relative border-b border-slate-800 bg-slate-900/60 backdrop-blur-xl sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-20">
-            {/* Logo e Identidade Visual 5D */}
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#E63946] via-[#F4A261] to-[#E9C46A] p-[2px] shadow-lg shadow-red-500/20">
-                <div className="w-full h-full bg-slate-950 rounded-2xl flex items-center justify-center">
-                  <Wind className="w-6 h-6 text-amber-400" />
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl font-extrabold tracking-tight gradient-text">
-                    TF PIPAS SYSTEM
-                  </h1>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-950 text-red-300 border border-red-800">
-                    5D ERP
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400">Tradição & Alta Performance Fabril • SEFAZ-RJ</p>
-              </div>
-            </div>
-
-            {/* Canvas 3D em Miniatura Integrado ao Cabeçalho */}
-            <div className="hidden md:flex items-center gap-2 w-48 h-16">
-              <Kite3DCanvas compact={true} />
-            </div>
-
-            {/* Status do Sistema e SEFAZ-RJ */}
-            <div className="hidden sm:flex items-center gap-3 text-xs">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700/80">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-slate-300 font-mono text-[11px]">SEFAZ-RJ: ONLINE</span>
-              </div>
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/60 border border-purple-800/80 text-purple-300">
-                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span className="font-mono text-[11px]">QWEN 3.5 ACTIVE</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Navegação por Abas Principais */}
-          <nav className="flex space-x-1 sm:space-x-2 pb-2 overflow-x-auto no-scrollbar">
-            <button
-              onClick={() => setActiveTab('pos')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                activeTab === 'pos'
-                  ? 'bg-gradient-to-r from-red-600 to-amber-600 text-white shadow-lg shadow-red-600/20'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-              }`}
-            >
-              <ShoppingCart className="w-4 h-4" />
-              Frente de Loja (PDV)
-            </button>
-
-            <button
-              onClick={() => setActiveTab('factory')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                activeTab === 'factory'
-                  ? 'bg-gradient-to-r from-red-600 to-amber-600 text-white shadow-lg shadow-red-600/20'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-              }`}
-            >
-              <Factory className="w-4 h-4" />
-              Estoque & Fábrica (BOM)
-            </button>
-
-            <button
-              onClick={() => setActiveTab('financial')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                activeTab === 'financial'
-                  ? 'bg-gradient-to-r from-red-600 to-amber-600 text-white shadow-lg shadow-red-600/20'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              Financeiro & DRE & ML
-            </button>
-
-            <button
-              onClick={() => setActiveTab('ai')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                activeTab === 'ai'
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/20'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-              }`}
-            >
-              <Bot className="w-4 h-4 text-purple-300" />
-              Central Hermes IA & MCP
-            </button>
-
-            <button
-              onClick={() => setActiveTab('3d')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                activeTab === '3d'
-                  ? 'bg-gradient-to-r from-amber-600 to-yellow-600 text-white shadow-lg shadow-amber-600/20'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-              }`}
-            >
-              <Box className="w-4 h-4" />
-              Ambiente 5D Pipa TF
-            </button>
-          </nav>
+    <div className="flex h-full animate-[aparecer_.35s_ease-out]">
+      <MenuLateral rota={rota} aoVerCapa={() => setNaCapa(true)} />
+      <main className={cx("rolagem-fina min-w-0 flex-1", rota === "pdv" ? "overflow-hidden px-5 py-4" : "overflow-y-auto px-8 py-7")}>
+        <div key={rota} className={cx("mx-auto animate-[entrarTela_.25s_ease-out]", rota === "pdv" ? "h-full max-w-[1500px]" : "max-w-[1320px]")}>
+          <Suspense fallback={<Carregando />}>
+            {rota === "inicio" && <Inicio />}
+            {rota === "pdv" && <Pdv />}
+            {rota === "produtos" && <Produtos />}
+            {rota === "caixa" && <Caixa />}
+            {rota === "vendas" && <Vendas />}
+            {rota === "financeiro" && <Financeiro />}
+            {rota === "relatorios" && <Relatorios />}
+            {rota === "configuracoes" && <Configuracoes />}
+          </Suspense>
         </div>
-      </header>
-
-      {/* Conteúdo Principal */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full">
-        {/* Vista Especial do Ambiente 3D 5D da Pipa */}
-        {activeTab === '3d' && (
-          <div className="flex flex-col gap-6">
-            <div className="glass-panel p-6 rounded-3xl border-t-4 border-t-amber-500 shadow-2xl">
-              <div className="text-center max-w-2xl mx-auto mb-4">
-                <span className="text-xs font-bold uppercase tracking-widest text-amber-400">
-                  Experiência Imersiva Tridimensional
-                </span>
-                <h2 className="text-2xl font-black text-white mt-1">
-                  Pipa Raia Carioca TF Pipas em Ambiente 5D
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Mova o cursor para inclinar em pitch/yaw com resposta aerodinâmica em tempo real, cauda com dinâmica senoidal de vento e partículas luminescentes.
-                </p>
-              </div>
-
-              <div className="h-[420px] rounded-2xl bg-gradient-to-b from-slate-950 via-[#0F172A] to-slate-950 p-4 border border-slate-800 relative">
-                <Kite3DCanvas compact={false} />
-                <div className="absolute bottom-4 left-6 text-[11px] text-slate-400 font-mono bg-slate-900/80 px-3 py-1.5 rounded-xl border border-slate-800">
-                  Render: Three.js WebGL • Geometria: Raia Losango 40cm • Cores TF: #E63946, #F4A261, #E9C46A
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Módulo PDV */}
-        {activeTab === 'pos' && (
-          <PosView products={products} onSaleComplete={fetchData} />
-        )}
-
-        {/* Módulo Estoque & Fábrica */}
-        {activeTab === 'factory' && (
-          <FactoryView
-            materials={materials}
-            products={products}
-            orders={orders}
-            onOrderCreated={fetchData}
-          />
-        )}
-
-        {/* Módulo Financeiro & DRE */}
-        {activeTab === 'financial' && (
-          <FinancialView
-            dre={dre}
-            cashflow={cashflow}
-            forecast={forecast}
-          />
-        )}
-
-        {/* Módulo Hermes IA & MCPs */}
-        {activeTab === 'ai' && (
-          <AiAgentsView />
-        )}
       </main>
-
-      {/* Footer Profissional */}
-      <footer className="border-t border-slate-800 bg-slate-950/80 py-4 text-center text-xs text-slate-500">
-        <p>TF Pipas System ERP &copy; {new Date().getFullYear()} • Monorepo Laravel + React PWA + FastAPI AI • Rio de Janeiro, Brasil</p>
-      </footer>
+      <Avisos />
+      <Confirmacoes />
     </div>
   );
 }
 
-export default App;
+function MenuLateral({ rota, aoVerCapa }: { rota: Rota; aoVerCapa: () => void }) {
+  const caixa = useApi<{ caixa: ResumoCaixa | null }>("/api/caixa/atual");
+  const saude = useApi<Saude>("/api/saude");
+  const agora = useAgora(20_000);
+  const aberto = caixa.dados?.caixa ?? null;
+  return (
+    <aside className="flex w-[244px] shrink-0 flex-col bg-tinta text-white">
+      <button type="button" onClick={aoVerCapa} title="Ver a capa" className="group flex items-center gap-3 px-5 pt-6 pb-5 text-left">
+        <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white shadow-[0_10px_24px_-12px_rgba(255,255,255,.35)] transition-transform duration-300 group-hover:-rotate-6">
+          <img src={logoSelo} alt="" className="size-[52px]" />
+        </span>
+        <span>
+          <span className="block text-[15px] font-extrabold tracking-[.14em]">TF PIPAS</span>
+          <span className="block text-[10.5px] font-semibold tracking-[.18em] text-white/50 uppercase">Gestão da loja</span>
+        </span>
+      </button>
+      <div className="mx-5 h-px bg-white/10" />
+      <nav className="rolagem-fina flex-1 overflow-y-auto px-3 py-4">
+        <p className="mb-2 px-3 text-[10px] font-bold tracking-[.22em] text-white/40 uppercase">Menu</p>
+        <ul className="flex flex-col gap-0.5">
+          {MENU.map(({ rota: r, rotulo, icone: Icone }) => {
+            const ativo = r === rota;
+            return (
+              <li key={r}>
+                <a
+                  href={`#/${r}`}
+                  className={cx(
+                    "flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-semibold transition-colors",
+                    ativo ? "bg-white text-tinta shadow-[0_8px_20px_-12px_rgba(255,255,255,.4)]" : "text-white/72 hover:bg-white/8 hover:text-white",
+                  )}
+                  aria-current={ativo ? "page" : undefined}
+                >
+                  <Icone className="size-[18px]" strokeWidth={2.1} />
+                  {rotulo}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+      <div className="mx-3 mb-3 rounded-2xl bg-white/[.06] p-3.5">
+        {caixa.erro ? (
+          <p className="text-[12px] text-[#ffb3b3]">Sem conexão com o programa da loja.</p>
+        ) : aberto ? (
+          <a href="#/caixa" className="block">
+            <p className="flex items-center gap-2 text-[12.5px] font-bold text-[#7fe0ad]">
+              <span className="size-2 animate-[pulsar_2.4s_ease-in-out_infinite] rounded-full bg-[#5fd39a]" /> Caixa aberto
+            </p>
+            <p className="mt-1 text-[12px] text-white/60">
+              desde {hora(aberto.sessao.aberto_em)} · {reais(aberto.gaveta.esperado_centavos)} na gaveta
+            </p>
+          </a>
+        ) : (
+          <a href="#/caixa" className="block">
+            <p className="flex items-center gap-2 text-[12.5px] font-bold text-white/80">
+              <span className="size-2 rounded-full bg-white/35" /> Caixa fechado
+            </p>
+            <p className="mt-1 text-[12px] text-white/50">Abra para começar a vender</p>
+          </a>
+        )}
+        <div className="my-3 h-px bg-white/10" />
+        <p className="text-[11.5px] text-white/45 first-letter:uppercase">
+          {dataPorExtenso(agora)} · {doisDigitos(agora.getHours())}:{doisDigitos(agora.getMinutes())}
+        </p>
+        <p className="mt-0.5 text-[11px] text-white/30">Sem internet · versão {saude.dados?.versao ?? "—"}</p>
+      </div>
+    </aside>
+  );
+}
